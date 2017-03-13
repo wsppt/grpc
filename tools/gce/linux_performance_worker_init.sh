@@ -137,7 +137,7 @@ gem install bundler
 
 # PHP dependencies
 
-sudo apt-get install -y php5 php5-dev phpunit php-pear unzip zlib1g-dev
+sudo apt-get install -y php php-dev phpunit php-pear unzip zlib1g-dev
 curl -sS https://getcomposer.org/installer | php
 sudo mv composer.phar /usr/local/bin/composer
 
@@ -171,4 +171,3 @@ echo 4096 | sudo tee /proc/sys/kernel/perf_event_mlock_kb
 # Fetch scripts to generate flame graphs from perf data collected
 # on benchmarks
 git clone -v https://github.com/brendangregg/FlameGraph ~/FlameGraph
-
