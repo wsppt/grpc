@@ -24,10 +24,19 @@ require dirname(__FILE__).'/vendor/autoload.php';
 @include_once dirname(__FILE__).'/helloworld.pb.php';
 @include_once dirname(__FILE__).'/helloworld_grpc_pb.php';
 
+class MyInterceptor extends \Grpc\ClientInterceptor {
+  public function UnaryCall(&$request, &$call_options, $method, &$metadata)
+  {
+    $metadata["foo"] = array('interceptor_from_request_response');
+    $request->setName("world from interceptor");
+  }
+}
+
 function greet($name)
 {
-    $client = new Helloworld\GreeterClient('localhost:50051', [
+	$client = new Helloworld\GreeterClient('localhost:50051', [
         'credentials' => Grpc\ChannelCredentials::createInsecure(),
+        'interceptors' => new MyInterceptor(),
     ]);
     $request = new Helloworld\HelloRequest();
     $request->setName($name);
