@@ -21,22 +21,22 @@ namespace Grpc;
 
 
 class Interceptor{
-  public function UnaryUnary($method, $argument, $deserialize,
+  public function interceptUnaryUnary($method, $argument, $deserialize,
                              array $metadata = [], array $options = [], $continuation){
     return $continuation($method, $argument, $deserialize, $metadata, $options);
   }
 
-  public function StreamUnary($method, $deserialize, array $metadata = [],
+  public function interceptStreamUnary($method, $deserialize, array $metadata = [],
                               array $options = [], $continuation){
     return $continuation($method, $deserialize, $metadata, $options);
   }
 
-  public function UnaryStream($method, $argument, $deserialize,
+  public function interceptUnaryStream($method, $argument, $deserialize,
                               array $metadata = [], array $options = [], $continuation){
     return $continuation($method, $argument, $deserialize, $metadata, $options);
   }
 
-  public function StreamStream($method, $deserialize,
+  public function interceptStreamStream($method, $deserialize,
                                array $metadata = [], array $options = [], $continuation){
     return $continuation($method, $deserialize, $metadata, $options);
   }
@@ -46,17 +46,12 @@ class InterceptorChannel {
   private $next = null;
   private $interceptor;
 
+  /**
+   * @param Channel|InterceptorChannel $channel An already created Channel
+   * or InterceptorChannel object (optional)
+   * @param Interceptor  $interceptor
+   */
   public function __construct($channel, Interceptor $interceptor) {
-    $check_channel = $channel;
-    while($check_channel){
-      if(is_a($check_channel, 'Grpc\Channel')){
-        break;
-      }
-      $check_channel = $check_channel->getNext();
-    }
-    if(!is_a($check_channel, 'Grpc\Channel')){
-      throw new \Exception("Error: channel argument should wrap a Grpc\Channel inside");
-    }
     $this->next = $channel;
     if($interceptor) {
       $this->interceptor = $interceptor;

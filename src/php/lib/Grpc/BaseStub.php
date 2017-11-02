@@ -38,7 +38,7 @@ class BaseStub
      *  - 'update_metadata': (optional) a callback function which takes in a
      * metadata array, and returns an updated metadata array
      *  - 'grpc.primary_user_agent': (optional) a user-agent string
-     * @param Channel/InterceptorChannel $channel An already created Channel or InterceptorChannel object (optional)
+     * @param Channel|InterceptorChannel $channel An already created Channel or InterceptorChannel object (optional)
      */
     public function __construct($hostname, $opts, $channel = null)
     {
@@ -301,7 +301,7 @@ class BaseStub
             return $this->GrpcUnaryUnary($channel);
         }
         return function($method, $argument, $deserialize, array $metadata = [], array $options = []) {
-            return $this->current_channel->getInterceptor()->UnaryUnary($method, $argument, $deserialize,
+            return $this->current_channel->getInterceptor()->interceptUnaryUnary($method, $argument, $deserialize,
                 $metadata, $options, $this->UnaryUnaryCallFactory($this->current_channel->getNext()));
         };
     }
@@ -312,7 +312,7 @@ class BaseStub
           return $this->GrpcUnaryStream($channel);
         }
         return function($method, $argument, $deserialize, array $metadata = [], array $options = []) {
-            return $this->current_channel->getInterceptor()->UnaryStream($method, $argument, $deserialize,
+            return $this->current_channel->getInterceptor()->interceptUnaryStream($method, $argument, $deserialize,
                 $metadata, $options, $this->UnaryStreamCallFactory($this->current_channel->getNext()));
         };
     }
@@ -323,7 +323,7 @@ class BaseStub
           return $this->GrpcStreamUnary($channel);
         }
         return function($method, $deserialize, array $metadata = [], array $options = []) {
-            return $this->current_channel->getInterceptor()->StreamUnary($method, $deserialize,
+            return $this->current_channel->getInterceptor()->interceptStreamUnary($method, $deserialize,
                 $metadata, $options, $this->StreamUnaryCallFactory($this->current_channel->getNext()));
         };
     }
@@ -334,7 +334,7 @@ class BaseStub
           return $this->GrpcStreamStream($channel);
         }
         return function($method, $deserialize, array $metadata = [], array $options = []) {
-            return $this->current_channel->getInterceptor()->StreamStream($method, $deserialize,
+            return $this->current_channel->getInterceptor()->interceptStreamStream($method, $deserialize,
                 $metadata, $options, $this->StreamStreamCallFactory($this->current_channel->getNext()));
         };
     }
