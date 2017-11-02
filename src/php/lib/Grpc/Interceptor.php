@@ -19,31 +19,26 @@
 
 namespace Grpc;
 
-class InterceptorHelper{
-  public static function intercept($channel, Interceptor $interceptor){
-    return new InterceptorChannel($channel, $interceptor);
-  }
-}
 
 class Interceptor{
   public function UnaryUnary($method, $argument, $deserialize,
-                             array $metadata = [], array $options = [], $call_factory){
-    return $call_factory($method, $argument, $deserialize, $metadata, $options);
+                             array $metadata = [], array $options = [], $continuation){
+    return $continuation($method, $argument, $deserialize, $metadata, $options);
   }
 
   public function StreamUnary($method, $deserialize, array $metadata = [],
-                              array $options = [], $call_factory){
-    return $call_factory($method, $deserialize, $metadata, $options);
+                              array $options = [], $continuation){
+    return $continuation($method, $deserialize, $metadata, $options);
   }
 
   public function UnaryStream($method, $argument, $deserialize,
-                              array $metadata = [], array $options = [], $call_factory){
-    return $call_factory($method, $argument, $deserialize, $metadata, $options);
+                              array $metadata = [], array $options = [], $continuation){
+    return $continuation($method, $argument, $deserialize, $metadata, $options);
   }
 
   public function StreamStream($method, $deserialize,
-                               array $metadata = [], array $options = [], $call_factory){
-    return $call_factory($method, $deserialize, $metadata, $options);
+                               array $metadata = [], array $options = [], $continuation){
+    return $continuation($method, $deserialize, $metadata, $options);
   }
 }
 
@@ -51,7 +46,17 @@ class InterceptorChannel {
   private $next = null;
   private $interceptor;
 
-  public function __construct($channel, $interceptor = null) {
+  public function __construct($channel, Interceptor $interceptor) {
+    $check_channel = $channel;
+    while($check_channel){
+      if(is_a($check_channel, 'Grpc\Channel')){
+        break;
+      }
+      $check_channel = $check_channel->getNext();
+    }
+    if(!is_a($check_channel, 'Grpc\Channel')){
+      throw new \Exception("Error: channel argument should wrap a Grpc\Channel inside");
+    }
     $this->next = $channel;
     if($interceptor) {
       $this->interceptor = $interceptor;
@@ -68,44 +73,24 @@ class InterceptorChannel {
     return $this->interceptor;
   }
 
-  public function setNext($next) {
-    $this->next = $next;
-  }
-
-  public function setInterceptor($interceptor) {
-    $this->interceptor = $interceptor;
-  }
-
   public function getTarget() {
-    if(!$this->getNext()){
-      throw new \Exception('Error: channel getTarget failed. ' .
-        'No Grpc/Channel inside interceptor');
-    }
     return $this->getNext()->getTarget();
   }
 
   public function watchConnectivityState($new_state, $deadline){
-    if(!$this->getNext()){
-      throw new \Exception('Error: channel watchConnectivityState failed. ' .
-        'No Grpc/Channel inside interceptor');
-    }
     return $this->getNext()->watchConnectivityState($new_state, $deadline);
   }
 
   public function getConnectivityState($try_to_connect = false){
-    if(!$this->getNext()){
-      throw new \Exception('Error: channel getConnectivityState failed. ' .
-        'No Grpc/Channel inside interceptor');
-    }
     return $this->getNext()->getConnectivityState($try_to_connect);
   }
 
   public function close(){
-    if(!$this->getNext()){
-      throw new \Exception('Error: channel close failed. ' .
-        'No Grpc/Channel inside interceptor');
-    }
     return $this->getNext()->close();
+  }
+
+  public static function intercept($channel, Interceptor $interceptor){
+    return new InterceptorChannel($channel, $interceptor);
   }
 }
 
