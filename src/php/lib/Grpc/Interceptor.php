@@ -49,15 +49,23 @@ class InterceptorChannel {
   /**
    * @param Channel|InterceptorChannel $channel An already created Channel
    * or InterceptorChannel object (optional)
-   * @param Interceptor  $interceptor
+   * @param Interceptor|Array  $interceptor
    */
-  public function __construct($channel, Interceptor $interceptor) {
-    $this->next = $channel;
-    if($interceptor) {
-      $this->interceptor = $interceptor;
-    } else {
-      $this->interceptor = new Interceptor();
+  public function __construct($channel, $interceptors) {
+    if($interceptors) {
+      if(is_array($interceptors)){
+        // remove the first element of the $interceptor
+        $interceptor = array_shift($interceptors);
+        $len = count($interceptors);
+        if($len) {
+          $channel = new InterceptorChannel($channel, $interceptors);
+        }
+      } else {
+        $interceptor = $interceptors;
+      }
     }
+    $this->interceptor = $interceptor;
+    $this->next = $channel;
   }
 
   public function getNext() {
@@ -84,7 +92,7 @@ class InterceptorChannel {
     return $this->getNext()->close();
   }
 
-  public static function intercept($channel, Interceptor $interceptor){
+  public static function intercept($channel, $interceptor){
     return new InterceptorChannel($channel, $interceptor);
   }
 }

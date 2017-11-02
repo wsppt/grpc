@@ -201,8 +201,9 @@ class InterceptorTest extends PHPUnit_Framework_TestCase
     $req_text = 'client_request';
     $channel_matadata_interceptor = new ChangeMetadataInterceptor();
     $channel_matadata_intercepto2 = new ChangeMetadataInterceptor2();
-    $intercept_channel1 = Grpc\InterceptorChannel::intercept($this->channel, $channel_matadata_interceptor);
-    $intercept_channel2 = Grpc\InterceptorChannel::intercept($intercept_channel1, $channel_matadata_intercepto2);
+    //$intercept_channel1 = Grpc\InterceptorChannel::intercept($this->channel, $channel_matadata_interceptor);
+    //$intercept_channel2 = Grpc\InterceptorChannel::intercept($intercept_channel1, $channel_matadata_intercepto2);
+    $intercept_channel2 = Grpc\InterceptorChannel::intercept($this->channel, [$channel_matadata_intercepto2, $channel_matadata_interceptor]);
     $client = new InterceptorClient('localhost:'.$this->port, [
       'credentials' => Grpc\ChannelCredentials::createInsecure(),
     ], $intercept_channel2);
