@@ -19,7 +19,9 @@
 
 namespace Grpc;
 
-
+/**
+ * Represents an interceptor that intercept operations for 4 methods before call starts.
+ */
 class Interceptor{
   public function interceptUnaryUnary($method, $argument, $deserialize,
                              array $metadata = [], array $options = [], $continuation){
@@ -40,6 +42,17 @@ class Interceptor{
                                array $metadata = [], array $options = [], $continuation){
     return $continuation($method, $deserialize, $metadata, $options);
   }
+
+  public static function intercept($channel, $interceptors){
+    if(is_array($interceptors)){
+      for($i = count($interceptors) - 1; $i >= 0; $i--) {
+        $channel = new InterceptorChannel($channel, $interceptors[$i]);
+      }
+    } else{
+      $channel =  new InterceptorChannel($channel, $interceptors);
+    }
+    return $channel;
+  }
 }
 
 class InterceptorChannel {
@@ -49,21 +62,9 @@ class InterceptorChannel {
   /**
    * @param Channel|InterceptorChannel $channel An already created Channel
    * or InterceptorChannel object (optional)
-   * @param Interceptor|Array  $interceptor
+   * @param Interceptor  $interceptor
    */
-  public function __construct($channel, $interceptors) {
-    if($interceptors) {
-      if(is_array($interceptors)){
-        // remove the first element of the $interceptor
-        $interceptor = array_shift($interceptors);
-        $len = count($interceptors);
-        if($len) {
-          $channel = new InterceptorChannel($channel, $interceptors);
-        }
-      } else {
-        $interceptor = $interceptors;
-      }
-    }
+  public function __construct($channel, $interceptor) {
     $this->interceptor = $interceptor;
     $this->next = $channel;
   }
@@ -90,10 +91,6 @@ class InterceptorChannel {
 
   public function close(){
     return $this->getNext()->close();
-  }
-
-  public static function intercept($channel, $interceptor){
-    return new InterceptorChannel($channel, $interceptor);
   }
 }
 

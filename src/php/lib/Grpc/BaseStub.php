@@ -76,7 +76,7 @@ class BaseStub
                 !is_a($channel, 'Grpc\InterceptorChannel')) {
                 throw new \Exception('The channel argument is not a Channel object '.
                     'or an InterceptorChannel object created by '.
-                    'InterceptorHelper::intercept($channel, Interceptor $interceptor)');
+                    'Interceptor::intercept($channel, Interceptor|Interceptor[] $interceptors)');
             }
             $this->channel = $channel;
             while(is_a($channel, 'Grpc\InterceptorChannel')) {
@@ -213,11 +213,10 @@ class BaseStub
 
         return $metadata_copy;
     }
-  
+
     private function GrpcUnaryUnary($channel){
-        $this->current_channel = $channel;
-        return function($method, $argument, $deserialize, array $metadata = [], array $options = []){
-            $call = new UnaryCall($this->current_channel,
+        return function($method, $argument, $deserialize, array $metadata = [], array $options = []) use ($channel) {
+            $call = new UnaryCall($channel,
                 $method,
                 $deserialize,
                 $options);
@@ -235,9 +234,8 @@ class BaseStub
     }
 
     private function GrpcStreamUnary($channel) {
-        $this->current_channel = $channel;
-        return function ($method, $deserialize, array $metadata = [], array $options = []) {
-            $call = new ClientStreamingCall($this->current_channel,
+        return function ($method, $deserialize, array $metadata = [], array $options = []) use ($channel) {
+            $call = new ClientStreamingCall($channel,
                 $method,
                 $deserialize,
                 $options);
@@ -255,9 +253,8 @@ class BaseStub
     }
 
     private function GrpcUnaryStream($channel) {
-        $this->current_channel = $channel;
-        return function ($method, $argument, $deserialize, array $metadata = [], array $options = []){
-            $call = new ServerStreamingCall($this->current_channel,
+        return function ($method, $argument, $deserialize, array $metadata = [], array $options = []) use ($channel) {
+            $call = new ServerStreamingCall($channel,
                 $method,
                 $deserialize,
                 $options);
@@ -275,9 +272,8 @@ class BaseStub
     }
 
     private function GrpcStreamStream($channel) {
-        $this->current_channel = $channel;
-        return function ($method, $deserialize, array $metadata = [], array $options = []){
-            $call = new BidiStreamingCall($this->current_channel,
+        return function ($method, $deserialize, array $metadata = [], array $options = [])  use ($channel) {
+            $call = new BidiStreamingCall($channel,
                 $method,
                 $deserialize,
                 $options);
