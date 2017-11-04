@@ -44,7 +44,8 @@ TRY IT!
  - Run the client
 
    ```
-   $ cd examples/php
+   $ cd examples/php/helloworld
+   $ ./greeter_proto_gen.sh
    $ ./run_greeter_client.sh
    ```
 
