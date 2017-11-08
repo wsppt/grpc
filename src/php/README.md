@@ -193,7 +193,21 @@ Add this to your `composer.json` file:
   "require": {
     "google/protobuf": "^v3.3.0"
   }
-``` 
+```
+
+The compability between the grpc and protobuf version is list as table below:
+
+grpc | protobuf
+--- | --- 
+v1.0.0 | 3.0.0(GA)
+v1.0.1 | 3.0.2
+v1.1.0 | 3.1.0 
+v1.2.0 | 3.2.0 
+v1.2.0 | 3.2.0 
+v1.3.4 | 3.3.0 
+v1.3.5 | 3.2.0
+v1.4.0 | 3.3.0 
+v1.6.0 | 3.4.0
 
 
 ### PHP Protoc Plugin
