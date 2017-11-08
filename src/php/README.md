@@ -33,8 +33,9 @@ $ sudo rpm -Uvh https://mirror.webtatic.com/yum/el7/webtatic-release.rpm
 $ sudo yum install php56w php56w-devel php-pear phpunit gcc zlib-devel
 ```
 
-**Install PECL on Mac:**
+**Install PHP and PECL on Mac:**
 ```sh
+$ brew install homebrew/php/php56-grpc
 $ curl -O http://pear.php.net/go-pear.phar
 $ sudo php -d detect_unicode=0 go-pear.phar
 ```
@@ -52,12 +53,45 @@ $ chmod +x phpunit-old.phar
 $ sudo mv phpunit-old.phar /usr/bin/phpunit
 ```
 
-## Quick Install
+## Install the gRPC PHP extension
 
-**Install the gRPC PHP extension**
+There are two ways to install gRPC PHP extension.
+
+### Using PECL
 
 ```sh
 sudo pecl install grpc
+```
+
+Note: for users on CentOS/RHEL 6, unfortunately this step won’t work. Please follow the instructions below to compile the PECL extension from source.
+
+### Build from Source with gRPC C core library
+
+Clone this repository
+
+```sh
+$ git clone -b $(curl -L https://grpc.io/release) https://github.com/grpc/grpc
+```
+
+#### Build and install the gRPC C core library
+
+```sh
+$ cd grpc
+$ git submodule update --init
+$ make
+$ sudo make install
+```
+
+#### gRPC PHP extension
+
+Compile the gRPC PHP extension
+
+```sh
+$ cd grpc/src/php/ext/grpc
+$ phpize
+$ ./configure
+$ make
+$ sudo make install
 ```
 
 This will compile and install the gRPC PHP extension into the standard PHP
@@ -68,14 +102,14 @@ Note: For users on CentOS/RHEL 6, unfortunately this step won't work. Please
 follow the instructions below to compile the extension from source.
 
 
+
 **Update php.ini**
 
-Add this line to your `php.ini` file, e.g. `/etc/php5/cli/php.ini`
+After installing the gRPC extension, make sure you add this line to your `php.ini` file, (e.g. `/etc/php5/cli/php.ini`, `/etc/php5/apache2/php.ini`, or `/usr/local/etc/php/5.6/php.ini`), depending on where your PHP installation is.
 
 ```sh
 extension=grpc.so
 ```
-
 
 **Add the gRPC PHP library as a Composer dependency**
 
@@ -91,38 +125,6 @@ To run tests with generated stub code from `.proto` files, you will also need
 the `composer` and `protoc` binaries. You can find out how to get these
 [below](#generated-code-tests).
 
-
-## Build from Source
-
-
-### gRPC C core library
-
-Clone this repository
-
-```sh
-$ git clone -b $(curl -L https://grpc.io/release) https://github.com/grpc/grpc
-```
-
-Build and install the gRPC C core library
-
-```sh
-$ cd grpc
-$ git pull --recurse-submodules && git submodule update --init --recursive
-$ make
-$ sudo make install
-```
-
-### gRPC PHP extension
-
-Compile the gRPC PHP extension
-
-```sh
-$ cd grpc/src/php/ext/grpc
-$ phpize
-$ ./configure
-$ make
-$ sudo make install
-```
 
 ## Unit Tests
 
