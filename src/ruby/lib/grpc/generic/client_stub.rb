@@ -1,31 +1,16 @@
-# Copyright 2015, Google Inc.
-# All rights reserved.
+# Copyright 2015 gRPC authors.
 #
-# Redistribution and use in source and binary forms, with or without
-# modification, are permitted provided that the following conditions are
-# met:
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
 #
-#     * Redistributions of source code must retain the above copyright
-# notice, this list of conditions and the following disclaimer.
-#     * Redistributions in binary form must reproduce the above
-# copyright notice, this list of conditions and the following disclaimer
-# in the documentation and/or other materials provided with the
-# distribution.
-#     * Neither the name of Google Inc. nor the names of its
-# contributors may be used to endorse or promote products derived from
-# this software without specific prior written permission.
+#     http://www.apache.org/licenses/LICENSE-2.0
 #
-# THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
-# "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
-# LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
-# A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
-# OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
-# SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
-# LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
-# DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
-# THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
-# (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
-# OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
 
 require_relative 'active_call'
 require_relative '../version'
@@ -34,7 +19,8 @@ require_relative '../version'
 module GRPC
   # rubocop:disable Metrics/ParameterLists
 
-  # ClientStub represents an endpoint used to send requests to GRPC servers.
+  # ClientStub represents a client connection to a gRPC server, and can be used
+  # to send requests.
   class ClientStub
     include Core::StatusCodes
     include Core::TimeConsts
@@ -75,14 +61,15 @@ module GRPC
     # my_stub = ClientStub.new(example.host.com:50505,
     #                          :this_channel_is_insecure)
     #
-    # Any arbitrary keyword arguments are treated as channel arguments used to
-    # configure the RPC connection to the host.
+    # If a channel_override argument is passed, it will be used as the
+    # underlying channel. Otherwise, the channel_args argument will be used
+    # to construct a new underlying channel.
     #
     # There are some specific keyword args that are not used to configure the
     # channel:
     #
     # - :channel_override
-    # when present, this must be a pre-created GRPC::Channel.  If it's
+    # when present, this must be a pre-created GRPC::Core::Channel.  If it's
     # present the host and arbitrary keyword arg areignored, and the RPC
     # connection uses this channel.
     #
@@ -91,21 +78,34 @@ module GRPC
     #
     # @param host [String] the host the stub connects to
     # @param creds [Core::ChannelCredentials|Symbol] the channel credentials, or
-    #     :this_channel_is_insecure
+    #     :this_channel_is_insecure, which explicitly indicates that the client
+    #     should be created with an insecure connection. Note: this argument is
+    #     ignored if the channel_override argument is provided.
     # @param channel_override [Core::Channel] a pre-created channel
     # @param timeout [Number] the default timeout to use in requests
-    # @param channel_args [Hash] the channel arguments
+    # @param propagate_mask [Number] A bitwise combination of flags in
+    #     GRPC::Core::PropagateMasks. Indicates how data should be propagated
+    #     from parent server calls to child client calls if this client is being
+    #     used within a gRPC server.
+    # @param channel_args [Hash] the channel arguments. Note: this argument is
+    #     ignored if the channel_override argument is provided.
+    # @param interceptors [Array<GRPC::ClientInterceptor>] An array of
+    #     GRPC::ClientInterceptor objects that will be used for
+    #     intercepting calls before they are executed
+    #     Interceptors are an EXPERIMENTAL API.
     def initialize(host, creds,
                    channel_override: nil,
                    timeout: nil,
                    propagate_mask: nil,
-                   channel_args: {})
+                   channel_args: {},
+                   interceptors: [])
       @ch = ClientStub.setup_channel(channel_override, host, creds,
                                      channel_args)
       alt_host = channel_args[Core::Channel::SSL_TARGET]
       @host = alt_host.nil? ? host : alt_host
       @propagate_mask = propagate_mask
       @timeout = timeout.nil? ? DEFAULT_TIMEOUT : timeout
+      @interceptors = InterceptorRegistry.new(interceptors)
     end
 
     # request_response sends a request to a GRPC server, and returns the
@@ -155,15 +155,29 @@ module GRPC
                           deadline: deadline,
                           parent: parent,
                           credentials: credentials)
-      return c.request_response(req, metadata: metadata) unless return_op
-
-      # return the operation view of the active_call; define #execute as a
-      # new method for this instance that invokes #request_response.
-      op = c.operation
-      op.define_singleton_method(:execute) do
-        c.request_response(req, metadata: metadata)
+      interception_context = @interceptors.build_context
+      intercept_args = {
+        method: method,
+        request: req,
+        call: c.interceptable,
+        metadata: metadata
+      }
+      if return_op
+        # return the operation view of the active_call; define #execute as a
+        # new method for this instance that invokes #request_response.
+        c.merge_metadata_to_send(metadata)
+        op = c.operation
+        op.define_singleton_method(:execute) do
+          interception_context.intercept!(:request_response, intercept_args) do
+            c.request_response(req, metadata: metadata)
+          end
+        end
+        op
+      else
+        interception_context.intercept!(:request_response, intercept_args) do
+          c.request_response(req, metadata: metadata)
+        end
       end
-      op
     end
 
     # client_streamer sends a stream of requests to a GRPC server, and
@@ -218,15 +232,29 @@ module GRPC
                           deadline: deadline,
                           parent: parent,
                           credentials: credentials)
-      return c.client_streamer(requests, metadata: metadata) unless return_op
-
-      # return the operation view of the active_call; define #execute as a
-      # new method for this instance that invokes #client_streamer.
-      op = c.operation
-      op.define_singleton_method(:execute) do
-        c.client_streamer(requests, metadata: metadata)
+      interception_context = @interceptors.build_context
+      intercept_args = {
+        method: method,
+        requests: requests,
+        call: c.interceptable,
+        metadata: metadata
+      }
+      if return_op
+        # return the operation view of the active_call; define #execute as a
+        # new method for this instance that invokes #client_streamer.
+        c.merge_metadata_to_send(metadata)
+        op = c.operation
+        op.define_singleton_method(:execute) do
+          interception_context.intercept!(:client_streamer, intercept_args) do
+            c.client_streamer(requests)
+          end
+        end
+        op
+      else
+        interception_context.intercept!(:client_streamer, intercept_args) do
+          c.client_streamer(requests, metadata: metadata)
+        end
       end
-      op
     end
 
     # server_streamer sends one request to the GRPC server, which yields a
@@ -296,15 +324,29 @@ module GRPC
                           deadline: deadline,
                           parent: parent,
                           credentials: credentials)
-      return c.server_streamer(req, metadata: metadata, &blk) unless return_op
-
-      # return the operation view of the active_call; define #execute
-      # as a new method for this instance that invokes #server_streamer
-      op = c.operation
-      op.define_singleton_method(:execute) do
-        c.server_streamer(req, metadata: metadata, &blk)
+      interception_context = @interceptors.build_context
+      intercept_args = {
+        method: method,
+        request: req,
+        call: c.interceptable,
+        metadata: metadata
+      }
+      if return_op
+        # return the operation view of the active_call; define #execute
+        # as a new method for this instance that invokes #server_streamer
+        c.merge_metadata_to_send(metadata)
+        op = c.operation
+        op.define_singleton_method(:execute) do
+          interception_context.intercept!(:server_streamer, intercept_args) do
+            c.server_streamer(req, &blk)
+          end
+        end
+        op
+      else
+        interception_context.intercept!(:server_streamer, intercept_args) do
+          c.server_streamer(req, metadata: metadata, &blk)
+        end
       end
-      op
     end
 
     # bidi_streamer sends a stream of requests to the GRPC server, and yields
@@ -389,11 +431,11 @@ module GRPC
     # @param marshal [Function] f(obj)->string that marshals requests
     # @param unmarshal [Function] f(string)->obj that unmarshals responses
     # @param deadline [Time] (optional) the time the request should complete
+    # @param return_op [true|false] return an Operation if true
     # @param parent [Core::Call] a prior call whose reserved metadata
     #   will be propagated by this one.
     # @param credentials [Core::CallCredentials] credentials to use when making
     #   the call
-    # @param return_op [true|false] return an Operation if true
     # @param metadata [Hash] metadata to be sent to the server
     # @param blk [Block] when provided, is executed for each response
     # @return [Enumerator|nil|Operation] as discussed above
@@ -408,17 +450,29 @@ module GRPC
                           deadline: deadline,
                           parent: parent,
                           credentials: credentials)
-
-      return c.bidi_streamer(requests, metadata: metadata,
-                             &blk) unless return_op
-
-      # return the operation view of the active_call; define #execute
-      # as a new method for this instance that invokes #bidi_streamer
-      op = c.operation
-      op.define_singleton_method(:execute) do
-        c.bidi_streamer(requests, metadata: metadata, &blk)
+      interception_context = @interceptors.build_context
+      intercept_args = {
+        method: method,
+        requests: requests,
+        call: c.interceptable,
+        metadata: metadata
+      }
+      if return_op
+        # return the operation view of the active_call; define #execute
+        # as a new method for this instance that invokes #bidi_streamer
+        c.merge_metadata_to_send(metadata)
+        op = c.operation
+        op.define_singleton_method(:execute) do
+          interception_context.intercept!(:bidi_streamer, intercept_args) do
+            c.bidi_streamer(requests, &blk)
+          end
+        end
+        op
+      else
+        interception_context.intercept!(:bidi_streamer, intercept_args) do
+          c.bidi_streamer(requests, metadata: metadata, &blk)
+        end
       end
-      op
     end
 
     private
@@ -430,12 +484,12 @@ module GRPC
     # @param unmarshal [Function] f(string)->obj that unmarshals responses
     # @param parent [Grpc::Call] a parent call, available when calls are
     #   made from server
-    # @param timeout [TimeConst]
+    # @param credentials [Core::CallCredentials] credentials to use when making
+    #   the call
     def new_active_call(method, marshal, unmarshal,
                         deadline: nil,
                         parent: nil,
                         credentials: nil)
-
       deadline = from_relative_time(@timeout) if deadline.nil?
       # Provide each new client call with its own completion queue
       call = @ch.create_call(parent, # parent call

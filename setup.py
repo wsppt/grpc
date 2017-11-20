@@ -1,45 +1,31 @@
-# Copyright 2015, Google Inc.
-# All rights reserved.
+# Copyright 2015 gRPC authors.
 #
-# Redistribution and use in source and binary forms, with or without
-# modification, are permitted provided that the following conditions are
-# met:
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
 #
-#     * Redistributions of source code must retain the above copyright
-# notice, this list of conditions and the following disclaimer.
-#     * Redistributions in binary form must reproduce the above
-# copyright notice, this list of conditions and the following disclaimer
-# in the documentation and/or other materials provided with the
-# distribution.
-#     * Neither the name of Google Inc. nor the names of its
-# contributors may be used to endorse or promote products derived from
-# this software without specific prior written permission.
+#     http://www.apache.org/licenses/LICENSE-2.0
 #
-# THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
-# "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
-# LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
-# A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
-# OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
-# SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
-# LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
-# DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
-# THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
-# (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
-# OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
 
 """A setup module for the GRPC Python package."""
-
+from distutils import cygwinccompiler
+from distutils import extension as _extension
+from distutils import util
 import os
 import os.path
+import pkg_resources
 import platform
+import re
 import shlex
 import shutil
 import sys
 import sysconfig
 
-from distutils import core as _core
-from distutils import extension as _extension
-import pkg_resources
 import setuptools
 from setuptools.command import egg_info
 
@@ -47,26 +33,48 @@ from setuptools.command import egg_info
 egg_info.manifest_maker.template = 'PYTHON-MANIFEST.in'
 
 PY3 = sys.version_info.major == 3
-PYTHON_STEM = './src/python/grpcio'
-CORE_INCLUDE = ('./include', '.',)
-BORINGSSL_INCLUDE = ('./third_party/boringssl/include',)
-ZLIB_INCLUDE = ('./third_party/zlib',)
+PYTHON_STEM = os.path.join('src', 'python', 'grpcio')
+CORE_INCLUDE = ('include', '.',)
+BORINGSSL_INCLUDE = (os.path.join('third_party', 'boringssl', 'include'),)
+ZLIB_INCLUDE = (os.path.join('third_party', 'zlib'),)
+CARES_INCLUDE = (
+    os.path.join('third_party', 'cares'),
+    os.path.join('third_party', 'cares', 'cares'),)
+if 'darwin' in sys.platform:
+  CARES_INCLUDE += (os.path.join('third_party', 'cares', 'config_darwin'),)
+if 'freebsd' in sys.platform:
+  CARES_INCLUDE += (os.path.join('third_party', 'cares', 'config_freebsd'),)
+if 'linux' in sys.platform:
+  CARES_INCLUDE += (os.path.join('third_party', 'cares', 'config_linux'),)
+if 'openbsd' in sys.platform:
+  CARES_INCLUDE += (os.path.join('third_party', 'cares', 'config_openbsd'),)
+README = os.path.join(PYTHON_STEM, 'README.rst')
 
 # Ensure we're in the proper directory whether or not we're being used by pip.
 os.chdir(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.abspath(PYTHON_STEM))
 
 # Break import-style to ensure we can actually find our in-repo dependencies.
-import _unixccompiler_patch
+import _spawn_patch
 import commands
 import grpc_core_dependencies
 import grpc_version
 
-if 'win32' in sys.platform:
-  _unixccompiler_patch.monkeypatch_unix_compiler()
+_spawn_patch.monkeypatch_spawn()
 
+LICENSE = 'Apache License 2.0'
 
-LICENSE = '3-clause BSD'
+CLASSIFIERS = [
+    'Development Status :: 5 - Production/Stable',
+    'Programming Language :: Python',
+    'Programming Language :: Python :: 2',
+    'Programming Language :: Python :: 2.7',
+    'Programming Language :: Python :: 3',
+    'Programming Language :: Python :: 3.4',
+    'Programming Language :: Python :: 3.5',
+    'Programming Language :: Python :: 3.6',
+    'License :: OSI Approved :: Apache Software License',
+]
 
 # Environment variable to determine whether or not the Cython extension should
 # *use* Cython or use the generated C files. Note that this requires the C files
@@ -80,6 +88,11 @@ BUILD_WITH_CYTHON = os.environ.get('GRPC_PYTHON_BUILD_WITH_CYTHON', False)
 ENABLE_CYTHON_TRACING = os.environ.get(
     'GRPC_PYTHON_ENABLE_CYTHON_TRACING', False)
 
+# Environment variable specifying whether or not there's interest in setting up
+# documentation building.
+ENABLE_DOCUMENTATION_BUILD = os.environ.get(
+    'GRPC_PYTHON_ENABLE_DOCUMENTATION_BUILD', False)
+
 # There are some situations (like on Windows) where CC, CFLAGS, and LDFLAGS are
 # entirely ignored/dropped/forgotten by distutils and its Cygwin/MinGW support.
 # We use these environment variables to thus get around that without locking
@@ -90,8 +103,9 @@ ENABLE_CYTHON_TRACING = os.environ.get(
 EXTRA_ENV_COMPILE_ARGS = os.environ.get('GRPC_PYTHON_CFLAGS', None)
 EXTRA_ENV_LINK_ARGS = os.environ.get('GRPC_PYTHON_LDFLAGS', None)
 if EXTRA_ENV_COMPILE_ARGS is None:
-  EXTRA_ENV_COMPILE_ARGS = '-fno-wrapv'
-  if 'win32' in sys.platform:
+  EXTRA_ENV_COMPILE_ARGS = ''
+  if 'win32' in sys.platform and sys.version_info < (3, 5):
+    EXTRA_ENV_COMPILE_ARGS += ' -std=c++11'
     # We use define flags here and don't directly add to DEFINE_MACROS below to
     # ensure that the expert user/builder has a way of turning it off (via the
     # envvars) without adding yet more GRPC-specific envvars.
@@ -100,22 +114,25 @@ if EXTRA_ENV_COMPILE_ARGS is None:
       EXTRA_ENV_COMPILE_ARGS += ' -D_ftime=_ftime32 -D_timeb=__timeb32 -D_ftime_s=_ftime32_s'
     else:
       EXTRA_ENV_COMPILE_ARGS += ' -D_ftime=_ftime64 -D_timeb=__timeb64'
-  elif "linux" in sys.platform or "darwin" in sys.platform:
-    EXTRA_ENV_COMPILE_ARGS += ' -fvisibility=hidden'
+  elif "linux" in sys.platform:
+    EXTRA_ENV_COMPILE_ARGS += ' -std=c++11 -std=gnu99 -fvisibility=hidden -fno-wrapv -fno-exceptions'
+  elif "darwin" in sys.platform:
+    EXTRA_ENV_COMPILE_ARGS += ' -fvisibility=hidden -fno-wrapv -fno-exceptions'
+
 if EXTRA_ENV_LINK_ARGS is None:
-  EXTRA_ENV_LINK_ARGS = '-lpthread'
-  if 'win32' in sys.platform:
-    # TODO(atash) check if this is actually safe to just import and call on
-    # non-Windows (to avoid breaking import style)
-    from distutils.cygwinccompiler import get_msvcr
-    msvcr = get_msvcr()[0]
+  EXTRA_ENV_LINK_ARGS = ''
+  if "linux" in sys.platform or "darwin" in sys.platform:
+    EXTRA_ENV_LINK_ARGS += ' -lpthread'
+  elif "win32" in sys.platform and sys.version_info < (3, 5):
+    msvcr = cygwinccompiler.get_msvcr()[0]
     # TODO(atash) sift through the GCC specs to see if libstdc++ can have any
     # influence on the linkage outcome on MinGW for non-C++ programs.
     EXTRA_ENV_LINK_ARGS += (
         ' -static-libgcc -static-libstdc++ -mcrtdll={msvcr} '
         '-static'.format(msvcr=msvcr))
-  elif "linux" in sys.platform:
-    EXTRA_ENV_LINK_ARGS += ' -Wl,-wrap,memcpy'
+  if "linux" in sys.platform:
+    EXTRA_ENV_LINK_ARGS += ' -Wl,-wrap,memcpy  -static-libgcc'
+
 EXTRA_COMPILE_ARGS = shlex.split(EXTRA_ENV_COMPILE_ARGS)
 EXTRA_LINK_ARGS = shlex.split(EXTRA_ENV_LINK_ARGS)
 
@@ -123,15 +140,15 @@ CYTHON_EXTENSION_PACKAGE_NAMES = ()
 
 CYTHON_EXTENSION_MODULE_NAMES = ('grpc._cython.cygrpc',)
 
-CYTHON_HELPER_C_FILES = (
-    os.path.join(PYTHON_STEM, 'grpc/_cython/loader.c'),
-    os.path.join(PYTHON_STEM, 'grpc/_cython/imports.generated.c'),
-)
+CYTHON_HELPER_C_FILES = ()
 
 CORE_C_FILES = tuple(grpc_core_dependencies.CORE_SOURCE_FILES)
+if "win32" in sys.platform:
+  CORE_C_FILES = filter(lambda x: 'third_party/cares' not in x, CORE_C_FILES)
 
 EXTENSION_INCLUDE_DIRECTORIES = (
-    (PYTHON_STEM,) + CORE_INCLUDE + BORINGSSL_INCLUDE + ZLIB_INCLUDE)
+    (PYTHON_STEM,) + CORE_INCLUDE + BORINGSSL_INCLUDE + ZLIB_INCLUDE +
+    CARES_INCLUDE)
 
 EXTENSION_LIBRARIES = ()
 if "linux" in sys.platform:
@@ -139,13 +156,24 @@ if "linux" in sys.platform:
 if not "win32" in sys.platform:
   EXTENSION_LIBRARIES += ('m',)
 if "win32" in sys.platform:
-  EXTENSION_LIBRARIES += ('ws2_32',)
+  EXTENSION_LIBRARIES += ('advapi32', 'ws2_32',)
 
-DEFINE_MACROS = (('OPENSSL_NO_ASM', 1), ('_WIN32_WINNT', 0x600), ('GPR_BACKWARDS_COMPATIBILITY_MODE', 1),)
+DEFINE_MACROS = (
+    ('OPENSSL_NO_ASM', 1), ('_WIN32_WINNT', 0x600),
+    ('GPR_BACKWARDS_COMPATIBILITY_MODE', 1),)
 if "win32" in sys.platform:
-  DEFINE_MACROS += (('OPENSSL_WINDOWS', 1), ('WIN32_LEAN_AND_MEAN', 1),)
+  # TODO(zyc): Re-enble c-ares on x64 and x86 windows after fixing the
+  # ares_library_init compilation issue
+  DEFINE_MACROS += (('WIN32_LEAN_AND_MEAN', 1), ('CARES_STATICLIB', 1),
+                    ('GRPC_ARES', 0), ('NTDDI_VERSION', 0x06000000),)
   if '64bit' in platform.architecture()[0]:
     DEFINE_MACROS += (('MS_WIN64', 1),)
+  elif sys.version_info >= (3, 5):
+    # For some reason, this is needed to get access to inet_pton/inet_ntop
+    # on msvc, but only for 32 bits
+    DEFINE_MACROS += (('NTDDI_VERSION', 0x06000000),)
+else:
+  DEFINE_MACROS += (('HAVE_CONFIG_H', 1),)
 
 LDFLAGS = tuple(EXTRA_LINK_ARGS)
 CFLAGS = tuple(EXTRA_COMPILE_ARGS)
@@ -153,7 +181,6 @@ if "linux" in sys.platform or "darwin" in sys.platform:
   pymodinit_type = 'PyObject*' if PY3 else 'void'
   pymodinit = '__attribute__((visibility ("default"))) {}'.format(pymodinit_type)
   DEFINE_MACROS += (('PyMODINIT_FUNC', pymodinit),)
-
 
 # By default, Python3 distutils enforces compatibility of
 # c plugins (.so files) with the OSX version Python3 was built with.
@@ -163,56 +190,44 @@ if 'darwin' in sys.platform and PY3:
   if mac_target and (pkg_resources.parse_version(mac_target) <
                      pkg_resources.parse_version('10.7.0')):
     os.environ['MACOSX_DEPLOYMENT_TARGET'] = '10.7'
+    os.environ['_PYTHON_HOST_PLATFORM'] = re.sub(
+        r'macosx-[0-9]+\.[0-9]+-(.+)',
+        r'macosx-10.7-\1',
+        util.get_platform())
 
-
-def cython_extensions():
-  module_names = list(CYTHON_EXTENSION_MODULE_NAMES)
-  extra_sources = list(CYTHON_HELPER_C_FILES) + list(CORE_C_FILES)
-  include_dirs = list(EXTENSION_INCLUDE_DIRECTORIES)
-  libraries = list(EXTENSION_LIBRARIES)
-  define_macros = list(DEFINE_MACROS)
-  build_with_cython = bool(BUILD_WITH_CYTHON)
-  # Set compiler directives linetrace argument only if we care about tracing;
-  # this is due to Cython having different behavior between linetrace being
-  # False and linetrace being unset. See issue #5689.
-  cython_compiler_directives = {}
-  if ENABLE_CYTHON_TRACING:
-    define_macros = define_macros + [('CYTHON_TRACE_NOGIL', 1)]
-    cython_compiler_directives['linetrace'] = True
-  pyx_module_files = [os.path.join(PYTHON_STEM,
-                                   name.replace('.', '/') + '.pyx')
-                      for name in module_names]
-  c_module_files = [os.path.join(PYTHON_STEM,
-                                 name.replace('.', '/') + '.c')
-                    for name in module_names]
-  if not build_with_cython:
-    for module_file in c_module_files:
-      if not os.path.isfile(module_file):
-        sys.stderr.write('Cython-generated files are missing; '
-                         'forcing Cython build...\n')
-        build_with_cython = True
-        break
-  module_files = pyx_module_files if build_with_cython else c_module_files
+def cython_extensions_and_necessity():
+  cython_module_files = [os.path.join(PYTHON_STEM,
+                               name.replace('.', '/') + '.pyx')
+                  for name in CYTHON_EXTENSION_MODULE_NAMES]
+  config = os.environ.get('CONFIG', 'opt')
+  prefix = 'libs/' + config + '/'
+  if "darwin" in sys.platform:
+    extra_objects = [prefix + 'libares.a',
+                     prefix + 'libboringssl.a',
+                     prefix + 'libgpr.a',
+                     prefix + 'libgrpc.a']
+    core_c_files = []
+  else:
+    core_c_files = list(CORE_C_FILES)
+    extra_objects = []
   extensions = [
       _extension.Extension(
           name=module_name,
-          sources=[module_file] + extra_sources,
-          include_dirs=include_dirs, libraries=libraries,
-          define_macros=define_macros,
+          sources=[module_file] + list(CYTHON_HELPER_C_FILES) + core_c_files,
+          include_dirs=list(EXTENSION_INCLUDE_DIRECTORIES),
+          libraries=list(EXTENSION_LIBRARIES),
+          define_macros=list(DEFINE_MACROS),
+          extra_objects=extra_objects,
           extra_compile_args=list(CFLAGS),
           extra_link_args=list(LDFLAGS),
-      ) for (module_name, module_file) in zip(module_names, module_files)
+      ) for (module_name, module_file) in zip(list(CYTHON_EXTENSION_MODULE_NAMES), cython_module_files)
   ]
-  if build_with_cython:
-    import Cython.Build
-    return Cython.Build.cythonize(
-        extensions,
-        include_path=include_dirs,
-        compiler_directives=cython_compiler_directives)
-  else:
-    return extensions
+  need_cython = BUILD_WITH_CYTHON
+  if not BUILD_WITH_CYTHON:
+    need_cython = need_cython or not commands.check_and_update_cythonization(extensions)
+  return commands.try_cythonize(extensions, linetracing=ENABLE_CYTHON_TRACING, mandatory=BUILD_WITH_CYTHON), need_cython
 
-CYTHON_EXTENSION_MODULES = cython_extensions()
+CYTHON_EXTENSION_MODULES, need_cython = cython_extensions_and_necessity()
 
 PACKAGE_DIRECTORIES = {
     '': PYTHON_STEM,
@@ -220,18 +235,32 @@ PACKAGE_DIRECTORIES = {
 
 INSTALL_REQUIRES = (
     'six>=1.5.2',
-    'enum34>=1.0.4',
-    'futures>=2.2.0',
     # TODO(atash): eventually split the grpcio package into a metapackage
     # depending on protobuf and the runtime component (independent of protobuf)
-    'protobuf>=3.0.0a3',
+    'protobuf>=3.3.0',
 )
+
+if not PY3:
+  INSTALL_REQUIRES += ('futures>=2.2.0', 'enum34>=1.0.4')
 
 SETUP_REQUIRES = INSTALL_REQUIRES + (
     'sphinx>=1.3',
     'sphinx_rtd_theme>=0.1.8',
     'six>=1.10',
-)
+  ) if ENABLE_DOCUMENTATION_BUILD else ()
+
+try:
+  import Cython
+except ImportError:
+  if BUILD_WITH_CYTHON:
+    sys.stderr.write(
+      "You requested a Cython build via GRPC_PYTHON_BUILD_WITH_CYTHON, "
+      "but do not have Cython installed. We won't stop you from using "
+      "other commands, but the extension files will fail to build.\n")
+  elif need_cython:
+    sys.stderr.write(
+        'We could not find Cython. Setup may take 10-20 minutes.\n')
+    SETUP_REQUIRES += ('cython>=0.23',)
 
 COMMAND_CLASS = {
     'doc': commands.SphinxDocumentation,
@@ -242,12 +271,13 @@ COMMAND_CLASS = {
 }
 
 # Ensure that package data is copied over before any commands have been run:
-credentials_dir = os.path.join(PYTHON_STEM, 'grpc/_cython/_credentials')
+credentials_dir = os.path.join(PYTHON_STEM, 'grpc', '_cython', '_credentials')
 try:
   os.mkdir(credentials_dir)
 except OSError:
   pass
-shutil.copyfile('etc/roots.pem', os.path.join(credentials_dir, 'roots.pem'))
+shutil.copyfile(os.path.join('etc', 'roots.pem'),
+                os.path.join(credentials_dir, 'roots.pem'))
 
 PACKAGE_DATA = {
     # Binaries that may or may not be present in the final installation, but are
@@ -263,7 +293,13 @@ PACKAGES = setuptools.find_packages(PYTHON_STEM)
 setuptools.setup(
   name='grpcio',
   version=grpc_version.VERSION,
+  description='HTTP/2-based RPC framework',
+  author='The gRPC Authors',
+  author_email='grpc-io@googlegroups.com',
+  url='https://grpc.io',
   license=LICENSE,
+  classifiers=CLASSIFIERS,
+  long_description=open(README).read(),
   ext_modules=CYTHON_EXTENSION_MODULES,
   packages=list(PACKAGES),
   package_dir=PACKAGE_DIRECTORIES,

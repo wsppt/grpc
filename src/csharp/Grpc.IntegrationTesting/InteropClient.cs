@@ -1,33 +1,18 @@
 #region Copyright notice and license
 
-// Copyright 2015-2016, Google Inc.
-// All rights reserved.
+// Copyright 2015-2016 gRPC authors.
 //
-// Redistribution and use in source and binary forms, with or without
-// modification, are permitted provided that the following conditions are
-// met:
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
 //
-//     * Redistributions of source code must retain the above copyright
-// notice, this list of conditions and the following disclaimer.
-//     * Redistributions in binary form must reproduce the above
-// copyright notice, this list of conditions and the following disclaimer
-// in the documentation and/or other materials provided with the
-// distribution.
-//     * Neither the name of Google Inc. nor the names of its
-// contributors may be used to endorse or promote products derived from
-// this software without specific prior written permission.
+//     http://www.apache.org/licenses/LICENSE-2.0
 //
-// THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
-// "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
-// LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
-// A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
-// OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
-// SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
-// LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
-// DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
-// THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
-// (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
-// OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 #endregion
 
@@ -45,6 +30,7 @@ using Google.Apis.Auth.OAuth2;
 using Google.Protobuf;
 using Grpc.Auth;
 using Grpc.Core;
+using Grpc.Core.Logging;
 using Grpc.Core.Utils;
 using Grpc.Testing;
 using Newtonsoft.Json.Linq;
@@ -56,24 +42,24 @@ namespace Grpc.IntegrationTesting
     {
         private class ClientOptions
         {
-            [Option("server_host", DefaultValue = "127.0.0.1")]
+            [Option("server_host", Default = "localhost")]
             public string ServerHost { get; set; }
 
-            [Option("server_host_override", DefaultValue = TestCredentials.DefaultHostOverride)]
+            [Option("server_host_override", Default = TestCredentials.DefaultHostOverride)]
             public string ServerHostOverride { get; set; }
 
             [Option("server_port", Required = true)]
             public int ServerPort { get; set; }
 
-            [Option("test_case", DefaultValue = "large_unary")]
+            [Option("test_case", Default = "large_unary")]
             public string TestCase { get; set; }
 
             // Deliberately using nullable bool type to allow --use_tls=true syntax (as opposed to --use_tls)
-            [Option("use_tls", DefaultValue = false)]
+            [Option("use_tls", Default = false)]
             public bool? UseTls { get; set; }
 
             // Deliberately using nullable bool type to allow --use_test_ca=true syntax (as opposed to --use_test_ca)
-            [Option("use_test_ca", DefaultValue = false)]
+            [Option("use_test_ca", Default = false)]
             public bool? UseTestCa { get; set; }
 
             [Option("default_service_account", Required = false)]
@@ -84,19 +70,6 @@ namespace Grpc.IntegrationTesting
 
             [Option("service_account_key_file", Required = false)]
             public string ServiceAccountKeyFile { get; set; }
-
-            [HelpOption]
-            public string GetUsage()
-            {
-                var help = new HelpText
-                {
-                    Heading = "gRPC C# interop testing client",
-                    AddDashesToOption = true
-                };
-                help.AddPreOptionsLine("Usage:");
-                help.AddOptions(this);
-                return help;
-            }
         }
 
         ClientOptions options;
@@ -108,14 +81,14 @@ namespace Grpc.IntegrationTesting
 
         public static void Run(string[] args)
         {
-            var options = new ClientOptions();
-            if (!Parser.Default.ParseArguments(args, options))
-            {
-                Environment.Exit(1);
-            }
-
-            var interopClient = new InteropClient(options);
-            interopClient.Run().Wait();
+            GrpcEnvironment.SetLogger(new ConsoleLogger());
+            var parserResult = Parser.Default.ParseArguments<ClientOptions>(args)
+                .WithNotParsed(errors => Environment.Exit(1))
+                .WithParsed(options =>
+                {
+                    var interopClient = new InteropClient(options);
+                    interopClient.Run().Wait();
+                });
         }
 
         private async Task Run()
@@ -145,26 +118,16 @@ namespace Grpc.IntegrationTesting
 
             if (options.TestCase == "jwt_token_creds")
             {
-#if !NETSTANDARD1_5
                 var googleCredential = await GoogleCredential.GetApplicationDefaultAsync();
                 Assert.IsTrue(googleCredential.IsCreateScopedRequired);
                 credentials = ChannelCredentials.Create(credentials, googleCredential.ToCallCredentials());
-#else
-                // TODO(jtattermusch): implement this
-                throw new NotImplementedException("Not supported on CoreCLR yet");
-#endif
             }
 
             if (options.TestCase == "compute_engine_creds")
             {
-#if !NETSTANDARD1_5
                 var googleCredential = await GoogleCredential.GetApplicationDefaultAsync();
                 Assert.IsFalse(googleCredential.IsCreateScopedRequired);
                 credentials = ChannelCredentials.Create(credentials, googleCredential.ToCallCredentials());
-#else
-                // TODO(jtattermusch): implement this
-                throw new NotImplementedException("Not supported on CoreCLR yet");
-#endif
             }
             return credentials;
         }
@@ -219,8 +182,11 @@ namespace Grpc.IntegrationTesting
                 case "status_code_and_message":
                     await RunStatusCodeAndMessageAsync(client);
                     break;
+                case "unimplemented_service":
+                    RunUnimplementedService(new UnimplementedService.UnimplementedServiceClient(channel));
+                    break;
                 case "unimplemented_method":
-                    RunUnimplementedMethod(new UnimplementedService.UnimplementedServiceClient(channel));
+                    RunUnimplementedMethod(client);
                     break;
                 case "client_compressed_unary":
                     RunClientCompressedUnary(client);
@@ -395,7 +361,6 @@ namespace Grpc.IntegrationTesting
 
         public static async Task RunOAuth2AuthTokenAsync(TestService.TestServiceClient client, string oauthScope)
         {
-#if !NETSTANDARD1_5
             Console.WriteLine("running oauth2_auth_token");
             ITokenAccess credential = (await GoogleCredential.GetApplicationDefaultAsync()).CreateScoped(new[] { oauthScope });
             string oauth2Token = await credential.GetAccessTokenForRequestAsync();
@@ -413,15 +378,10 @@ namespace Grpc.IntegrationTesting
             Assert.True(oauthScope.Contains(response.OauthScope));
             Assert.AreEqual(GetEmailFromServiceAccountFile(), response.Username);
             Console.WriteLine("Passed!");
-#else
-            // TODO(jtattermusch): implement this
-            throw new NotImplementedException("Not supported on CoreCLR yet");
-#endif
         }
 
         public static async Task RunPerRpcCredsAsync(TestService.TestServiceClient client, string oauthScope)
         {
-#if !NETSTANDARD1_5
             Console.WriteLine("running per_rpc_creds");
             ITokenAccess googleCredential = await GoogleCredential.GetApplicationDefaultAsync();
 
@@ -435,10 +395,6 @@ namespace Grpc.IntegrationTesting
 
             Assert.AreEqual(GetEmailFromServiceAccountFile(), response.Username);
             Console.WriteLine("Passed!");
-#else
-            // TODO(jtattermusch): implement this
-            throw new NotImplementedException("Not supported on CoreCLR yet");
-#endif
         }
 
         public static async Task RunCancelAfterBeginAsync(TestService.TestServiceClient client)
@@ -554,12 +510,12 @@ namespace Grpc.IntegrationTesting
                 };
 
                 var call = client.FullDuplexCall(headers: CreateTestMetadata());
-                var responseHeaders = await call.ResponseHeadersAsync;
 
                 await call.RequestStream.WriteAsync(request);
                 await call.RequestStream.CompleteAsync();
                 await call.ResponseStream.ToListAsync();
 
+                var responseHeaders = await call.ResponseHeadersAsync;
                 var responseTrailers = call.GetTrailers();
 
                 Assert.AreEqual("test_initial_metadata_value", responseHeaders.First((entry) => entry.Key == "x-grpc-test-echo-initial").Value);
@@ -611,13 +567,21 @@ namespace Grpc.IntegrationTesting
             Console.WriteLine("Passed!");
         }
 
-        public static void RunUnimplementedMethod(UnimplementedService.UnimplementedServiceClient client)
+        public static void RunUnimplementedService(UnimplementedService.UnimplementedServiceClient client)
+        {
+            Console.WriteLine("running unimplemented_service");
+            var e = Assert.Throws<RpcException>(() => client.UnimplementedCall(new Empty()));
+
+            Assert.AreEqual(StatusCode.Unimplemented, e.Status.StatusCode);
+            Console.WriteLine("Passed!");
+        }
+
+        public static void RunUnimplementedMethod(TestService.TestServiceClient client)
         {
             Console.WriteLine("running unimplemented_method");
             var e = Assert.Throws<RpcException>(() => client.UnimplementedCall(new Empty()));
 
             Assert.AreEqual(StatusCode.Unimplemented, e.Status.StatusCode);
-            Assert.AreEqual("", e.Status.Detail);
             Console.WriteLine("Passed!");
         }
 
@@ -731,17 +695,12 @@ namespace Grpc.IntegrationTesting
         // extracts the client_email field from service account file used for auth test cases
         private static string GetEmailFromServiceAccountFile()
         {
-#if !NETSTANDARD1_5
             string keyFile = Environment.GetEnvironmentVariable("GOOGLE_APPLICATION_CREDENTIALS");
             Assert.IsNotNull(keyFile);
             var jobject = JObject.Parse(File.ReadAllText(keyFile));
             string email = jobject.GetValue("client_email").Value<string>();
             Assert.IsTrue(email.Length > 0);  // spec requires nonempty client email.
             return email;
-#else
-            // TODO(jtattermusch): implement this
-            throw new NotImplementedException("Not supported on CoreCLR yet");
-#endif
         }
 
         private static Metadata CreateTestMetadata()

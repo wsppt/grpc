@@ -1,33 +1,18 @@
 /*
  *
- * Copyright 2015, Google Inc.
- * All rights reserved.
+ * Copyright 2015 gRPC authors.
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are
- * met:
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
  *
- *     * Redistributions of source code must retain the above copyright
- * notice, this list of conditions and the following disclaimer.
- *     * Redistributions in binary form must reproduce the above
- * copyright notice, this list of conditions and the following disclaimer
- * in the documentation and/or other materials provided with the
- * distribution.
- *     * Neither the name of Google Inc. nor the names of its
- * contributors may be used to endorse or promote products derived from
- * this software without specific prior written permission.
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
- * "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
- * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
- * A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
- * OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
- * SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
- * LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
- * DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
- * THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
- * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  *
  */
 
@@ -38,6 +23,7 @@
 #import <Cronet/Cronet.h>
 #import <GRPCClient/GRPCCall+ChannelArg.h>
 #import <GRPCClient/GRPCCall+Tests.h>
+#import <GRPCClient/internal_testing/GRPCCall+InternalTests.h>
 #import <GRPCClient/GRPCCall+Cronet.h>
 #import <ProtoRPC/ProtoRPC.h>
 #import <RemoteTest/Messages.pbobjc.h>
@@ -45,6 +31,10 @@
 #import <RemoteTest/Test.pbrpc.h>
 #import <RxLibrary/GRXBufferedPipe.h>
 #import <RxLibrary/GRXWriter+Immediate.h>
+#import <grpc/support/log.h>
+#import <grpc/grpc.h>
+
+#define TEST_TIMEOUT 32
 
 // Convenience constructors for the generated proto messages:
 
@@ -80,10 +70,6 @@
 
 #pragma mark Tests
 
-#ifdef GRPC_COMPILE_WITH_CRONET
-static cronet_engine *cronetEngine = NULL;
-#endif
-
 @implementation InteropTests {
   RMTTestService *_service;
 }
@@ -92,17 +78,28 @@ static cronet_engine *cronetEngine = NULL;
   return nil;
 }
 
-- (void)setUp {
-  _service = self.class.host ? [RMTTestService serviceWithHost:self.class.host] : nil;
+// This number indicates how many bytes of overhead does Protocol Buffers encoding add onto the
+// message. The number varies as different message.proto is used on different servers. The actual
+// number for each interop server is overridden in corresponding derived test classes.
+- (int32_t)encodingOverhead {
+  return 0;
+}
+
++ (void)setUp {
 #ifdef GRPC_COMPILE_WITH_CRONET
-  if (cronetEngine == NULL) {
-    // Cronet setup
-    [Cronet setHttp2Enabled:YES];
-    [Cronet start];
-    cronetEngine = [Cronet getGlobalEngine];
-    [GRPCCall useCronetWithEngine:cronetEngine];
-  }
+  // Cronet setup
+  [Cronet setHttp2Enabled:YES];
+  [Cronet start];
+  [GRPCCall useCronetWithEngine:[Cronet getGlobalEngine]];
 #endif
+}
+
+- (void)setUp {
+  self.continueAfterFailure = NO;
+
+  [GRPCCall resetHostSettings];
+
+  _service = self.class.host ? [RMTTestService serviceWithHost:self.class.host] : nil;
 }
 
 - (void)testEmptyUnaryRPC {
@@ -120,7 +117,7 @@ static cronet_engine *cronetEngine = NULL;
     [expectation fulfill];
   }];
 
-  [self waitForExpectationsWithTimeout:4 handler:nil];
+  [self waitForExpectationsWithTimeout:TEST_TIMEOUT handler:nil];
 }
 
 - (void)testLargeUnaryRPC {
@@ -143,7 +140,103 @@ static cronet_engine *cronetEngine = NULL;
     [expectation fulfill];
   }];
 
+  [self waitForExpectationsWithTimeout:TEST_TIMEOUT handler:nil];
+}
+
+- (void)testPacketCoalescing {
+  XCTAssertNotNil(self.class.host);
+  __weak XCTestExpectation *expectation = [self expectationWithDescription:@"LargeUnary"];
+
+  RMTSimpleRequest *request = [RMTSimpleRequest message];
+  request.responseType = RMTPayloadType_Compressable;
+  request.responseSize = 10;
+  request.payload.body = [NSMutableData dataWithLength:10];
+
+  [GRPCCall enableOpBatchLog:YES];
+  [_service unaryCallWithRequest:request handler:^(RMTSimpleResponse *response, NSError *error) {
+    XCTAssertNil(error, @"Finished with unexpected error: %@", error);
+
+    RMTSimpleResponse *expectedResponse = [RMTSimpleResponse message];
+    expectedResponse.payload.type = RMTPayloadType_Compressable;
+    expectedResponse.payload.body = [NSMutableData dataWithLength:10];
+    XCTAssertEqualObjects(response, expectedResponse);
+
+    // The test is a success if there is a batch of exactly 3 ops (SEND_INITIAL_METADATA,
+    // SEND_MESSAGE, SEND_CLOSE_FROM_CLIENT). Without packet coalescing each batch of ops contains
+    // only one op.
+    NSArray *opBatches = [GRPCCall obtainAndCleanOpBatchLog];
+    const NSInteger kExpectedOpBatchSize = 3;
+    for (NSObject *o in opBatches) {
+      if ([o isKindOfClass:[NSArray class]]) {
+        NSArray *batch = (NSArray *)o;
+        if ([batch count] == kExpectedOpBatchSize) {
+          [expectation fulfill];
+          break;
+        }
+      }
+    }
+  }];
+
   [self waitForExpectationsWithTimeout:16 handler:nil];
+  [GRPCCall enableOpBatchLog:NO];
+}
+
+- (void)test4MBResponsesAreAccepted {
+  XCTAssertNotNil(self.class.host);
+  __weak XCTestExpectation *expectation = [self expectationWithDescription:@"MaxResponseSize"];
+
+  RMTSimpleRequest *request = [RMTSimpleRequest message];
+  const int32_t kPayloadSize = 4 * 1024 * 1024 - self.encodingOverhead; // 4MB - encoding overhead
+  request.responseSize = kPayloadSize;
+
+  [_service unaryCallWithRequest:request handler:^(RMTSimpleResponse *response, NSError *error) {
+    XCTAssertNil(error, @"Finished with unexpected error: %@", error);
+    XCTAssertEqual(response.payload.body.length, kPayloadSize);
+    [expectation fulfill];
+  }];
+
+  [self waitForExpectationsWithTimeout:TEST_TIMEOUT handler:nil];
+}
+
+- (void)testResponsesOverMaxSizeFailWithActionableMessage {
+  XCTAssertNotNil(self.class.host);
+  __weak XCTestExpectation *expectation = [self expectationWithDescription:@"ResponseOverMaxSize"];
+
+  RMTSimpleRequest *request = [RMTSimpleRequest message];
+  const int32_t kPayloadSize = 4 * 1024 * 1024 - self.encodingOverhead + 1; // 1B over max size
+  request.responseSize = kPayloadSize;
+
+  [_service unaryCallWithRequest:request handler:^(RMTSimpleResponse *response, NSError *error) {
+    // TODO(jcanizales): Catch the error and rethrow it with an actionable message:
+    // - Use +[GRPCCall setResponseSizeLimit:forHost:] to set a higher limit.
+    // - If you're developing the server, consider using response streaming, or let clients filter
+    //   responses by setting a google.protobuf.FieldMask in the request:
+    //   https://github.com/google/protobuf/blob/master/src/google/protobuf/field_mask.proto
+    XCTAssertEqualObjects(error.localizedDescription, @"Received message larger than max (4194305 vs. 4194304)");
+    [expectation fulfill];
+  }];
+
+  [self waitForExpectationsWithTimeout:TEST_TIMEOUT handler:nil];
+}
+
+- (void)testResponsesOver4MBAreAcceptedIfOptedIn {
+  XCTAssertNotNil(self.class.host);
+  __weak XCTestExpectation *expectation =
+      [self expectationWithDescription:@"HigherResponseSizeLimit"];
+
+  RMTSimpleRequest *request = [RMTSimpleRequest message];
+  const size_t kPayloadSize = 5 * 1024 * 1024; // 5MB
+  request.responseSize = kPayloadSize;
+
+  [GRPCCall setResponseSizeLimit:6 * 1024 * 1024 forHost:self.class.host];
+
+  [_service unaryCallWithRequest:request handler:^(RMTSimpleResponse *response, NSError *error) {
+    XCTAssertNil(error, @"Finished with unexpected error: %@", error);
+    XCTAssertEqual(response.payload.body.length, kPayloadSize);
+    [expectation fulfill];
+  }];
+
+  [self waitForExpectationsWithTimeout:TEST_TIMEOUT handler:nil];
 }
 
 - (void)testClientStreamingRPC {
@@ -176,7 +269,7 @@ static cronet_engine *cronetEngine = NULL;
     [expectation fulfill];
   }];
 
-  [self waitForExpectationsWithTimeout:8 handler:nil];
+  [self waitForExpectationsWithTimeout:TEST_TIMEOUT handler:nil];
 }
 
 - (void)testServerStreamingRPC {
@@ -213,7 +306,7 @@ static cronet_engine *cronetEngine = NULL;
     }
   }];
 
-  [self waitForExpectationsWithTimeout:8 handler:nil];
+  [self waitForExpectationsWithTimeout:TEST_TIMEOUT handler:nil];
 }
 
 - (void)testPingPongRPC {
@@ -257,11 +350,9 @@ static cronet_engine *cronetEngine = NULL;
       [expectation fulfill];
     }
   }];
-  [self waitForExpectationsWithTimeout:4 handler:nil];
+  [self waitForExpectationsWithTimeout:TEST_TIMEOUT handler:nil];
 }
 
-#ifndef GRPC_COMPILE_WITH_CRONET
-// TODO(makdharma@): Fix this test
 - (void)testEmptyStreamRPC {
   XCTAssertNotNil(self.class.host);
   __weak XCTestExpectation *expectation = [self expectationWithDescription:@"EmptyStream"];
@@ -273,9 +364,8 @@ static cronet_engine *cronetEngine = NULL;
     XCTAssert(done, @"Unexpected response: %@", response);
     [expectation fulfill];
   }];
-  [self waitForExpectationsWithTimeout:2 handler:nil];
+  [self waitForExpectationsWithTimeout:TEST_TIMEOUT handler:nil];
 }
-#endif
 
 - (void)testCancelAfterBeginRPC {
   XCTAssertNotNil(self.class.host);
@@ -299,7 +389,7 @@ static cronet_engine *cronetEngine = NULL;
   [call cancel];
   XCTAssertEqual(call.state, GRXWriterStateFinished);
 
-  [self waitForExpectationsWithTimeout:1 handler:nil];
+  [self waitForExpectationsWithTimeout:TEST_TIMEOUT handler:nil];
 }
 
 - (void)testCancelAfterFirstResponseRPC {
@@ -334,7 +424,7 @@ static cronet_engine *cronetEngine = NULL;
     }
   }];
   [call start];
-  [self waitForExpectationsWithTimeout:8 handler:nil];
+  [self waitForExpectationsWithTimeout:TEST_TIMEOUT handler:nil];
 }
 
 - (void)testRPCAfterClosingOpenConnections {
@@ -358,7 +448,7 @@ static cronet_engine *cronetEngine = NULL;
     }];
   }];
 
-  [self waitForExpectationsWithTimeout:4 handler:nil];
+  [self waitForExpectationsWithTimeout:TEST_TIMEOUT handler:nil];
 }
 
 @end

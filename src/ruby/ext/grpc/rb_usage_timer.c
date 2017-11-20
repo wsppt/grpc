@@ -39,7 +39,7 @@
 #include <grpc/grpc.h>
 
 #include <grpc/support/time.h>
-#include <grpc/impl/codegen/alloc.h>
+#include <grpc/support/alloc.h>
 #include <sys/resource.h>
 #include <sys/time.h>
 

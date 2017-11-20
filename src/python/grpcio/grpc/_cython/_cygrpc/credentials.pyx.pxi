@@ -1,38 +1,27 @@
-# Copyright 2015, Google Inc.
-# All rights reserved.
+# Copyright 2015 gRPC authors.
 #
-# Redistribution and use in source and binary forms, with or without
-# modification, are permitted provided that the following conditions are
-# met:
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
 #
-#     * Redistributions of source code must retain the above copyright
-# notice, this list of conditions and the following disclaimer.
-#     * Redistributions in binary form must reproduce the above
-# copyright notice, this list of conditions and the following disclaimer
-# in the documentation and/or other materials provided with the
-# distribution.
-#     * Neither the name of Google Inc. nor the names of its
-# contributors may be used to endorse or promote products derived from
-# this software without specific prior written permission.
+#     http://www.apache.org/licenses/LICENSE-2.0
 #
-# THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
-# "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
-# LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
-# A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
-# OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
-# SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
-# LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
-# DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
-# THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
-# (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
-# OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
 
 cimport cpython
+
+import threading
+import traceback
 
 
 cdef class ChannelCredentials:
 
   def __cinit__(self):
+    grpc_init()
     self.c_credentials = NULL
     self.c_ssl_pem_key_cert_pair.private_key = NULL
     self.c_ssl_pem_key_cert_pair.certificate_chain = NULL
@@ -47,11 +36,13 @@ cdef class ChannelCredentials:
   def __dealloc__(self):
     if self.c_credentials != NULL:
       grpc_channel_credentials_release(self.c_credentials)
+    grpc_shutdown()
 
 
 cdef class CallCredentials:
 
   def __cinit__(self):
+    grpc_init()
     self.c_credentials = NULL
     self.references = []
 
@@ -64,17 +55,20 @@ cdef class CallCredentials:
   def __dealloc__(self):
     if self.c_credentials != NULL:
       grpc_call_credentials_release(self.c_credentials)
+    grpc_shutdown()
 
 
 cdef class ServerCredentials:
 
   def __cinit__(self):
+    grpc_init()
     self.c_credentials = NULL
     self.references = []
 
   def __dealloc__(self):
     if self.c_credentials != NULL:
       grpc_server_credentials_release(self.c_credentials)
+    grpc_shutdown()
 
 
 cdef class CredentialsMetadataPlugin:
@@ -83,32 +77,37 @@ cdef class CredentialsMetadataPlugin:
     """
     Args:
       plugin_callback (callable): Callback accepting a service URL (str/bytes)
-        and callback object (accepting a Metadata,
+        and callback object (accepting a MetadataArray,
         grpc_status_code, and a str/bytes error message). This argument
         when called should be non-blocking and eventually call the callback
         object with the appropriate status code/details and metadata (if
         successful).
       name (bytes): Plugin name.
     """
+    grpc_init()
     if not callable(plugin_callback):
       raise ValueError('expected callable plugin_callback')
     self.plugin_callback = plugin_callback
     self.plugin_name = name
 
-  @staticmethod
-  cdef grpc_metadata_credentials_plugin make_c_plugin(self):
-    cdef grpc_metadata_credentials_plugin result
-    result.get_metadata = plugin_get_metadata
-    result.destroy = plugin_destroy_c_plugin_state
-    result.state = <void *>self
-    result.type = self.plugin_name
-    cpython.Py_INCREF(self)
-    return result
+  def __dealloc__(self):
+    grpc_shutdown()
+
+
+cdef grpc_metadata_credentials_plugin _c_plugin(CredentialsMetadataPlugin plugin):
+  cdef grpc_metadata_credentials_plugin c_plugin
+  c_plugin.get_metadata = plugin_get_metadata
+  c_plugin.destroy = plugin_destroy_c_plugin_state
+  c_plugin.state = <void *>plugin
+  c_plugin.type = plugin.plugin_name
+  cpython.Py_INCREF(plugin)
+  return c_plugin
 
 
 cdef class AuthMetadataContext:
 
   def __cinit__(self):
+    grpc_init()
     self.context.service_url = NULL
     self.context.method_name = NULL
 
@@ -120,19 +119,34 @@ cdef class AuthMetadataContext:
   def method_name(self):
     return self.context.method_name
 
+  def __dealloc__(self):
+    grpc_shutdown()
 
-cdef void plugin_get_metadata(
+
+cdef int plugin_get_metadata(
     void *state, grpc_auth_metadata_context context,
-    grpc_credentials_plugin_metadata_cb cb, void *user_data) with gil:
+    grpc_credentials_plugin_metadata_cb cb, void *user_data,
+    grpc_metadata creds_md[GRPC_METADATA_CREDENTIALS_PLUGIN_SYNC_MAX],
+    size_t *num_creds_md, grpc_status_code *status,
+    const char **error_details) with gil:
+  called_flag = [False]
   def python_callback(
       Metadata metadata, grpc_status_code status,
       bytes error_details):
-    cb(user_data, metadata.c_metadata_array.metadata,
-       metadata.c_metadata_array.count, status, error_details)
+    cb(user_data, metadata.c_metadata, metadata.c_count, status, error_details)
+    called_flag[0] = True
   cdef CredentialsMetadataPlugin self = <CredentialsMetadataPlugin>state
   cdef AuthMetadataContext cy_context = AuthMetadataContext()
   cy_context.context = context
-  self.plugin_callback(cy_context, python_callback)
+  def async_callback():
+    try:
+      self.plugin_callback(cy_context, python_callback)
+    except Exception as error:
+      if not called_flag[0]:
+        cb(user_data, NULL, 0, StatusCode.unknown,
+           traceback.format_exc().encode())
+  threading.Thread(group=None, target=async_callback).start()
+  return 0  # Asynchronous return
 
 cdef void plugin_destroy_c_plugin_state(void *state) with gil:
   cpython.Py_DECREF(<CredentialsMetadataPlugin>state)
@@ -232,7 +246,7 @@ def call_credentials_google_iam(authorization_token, authority_selector):
 
 def call_credentials_metadata_plugin(CredentialsMetadataPlugin plugin):
   cdef CallCredentials credentials = CallCredentials()
-  cdef grpc_metadata_credentials_plugin c_plugin = plugin.make_c_plugin()
+  cdef grpc_metadata_credentials_plugin c_plugin = _c_plugin(plugin)
   with nogil:
     credentials.c_credentials = (
         grpc_metadata_credentials_create_from_plugin(c_plugin, NULL))

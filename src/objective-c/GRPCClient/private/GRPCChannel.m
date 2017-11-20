@@ -1,33 +1,18 @@
 /*
  *
- * Copyright 2015, Google Inc.
- * All rights reserved.
+ * Copyright 2015 gRPC authors.
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are
- * met:
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
  *
- *     * Redistributions of source code must retain the above copyright
- * notice, this list of conditions and the following disclaimer.
- *     * Redistributions in binary form must reproduce the above
- * copyright notice, this list of conditions and the following disclaimer
- * in the documentation and/or other materials provided with the
- * distribution.
- *     * Neither the name of Google Inc. nor the names of its
- * contributors may be used to endorse or promote products derived from
- * this software without specific prior written permission.
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
- * "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
- * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
- * A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
- * OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
- * SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
- * LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
- * DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
- * THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
- * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  *
  */
 
@@ -47,7 +32,7 @@
 #endif
 #import "GRPCCompletionQueue.h"
 
-void freeChannelArgs(grpc_channel_args *channel_args) {
+static void FreeChannelArgs(grpc_channel_args *channel_args) {
   for (size_t i = 0; i < channel_args->num_args; ++i) {
     grpc_arg *arg = &channel_args->args[i];
     gpr_free(arg->key);
@@ -65,7 +50,7 @@ void freeChannelArgs(grpc_channel_args *channel_args) {
  * value responds to @c @selector(intValue). Otherwise, an exception will be raised. The caller of
  * this function is responsible for calling @c freeChannelArgs on a non-NULL returned value.
  */
-grpc_channel_args * buildChannelArgs(NSDictionary *dictionary) {
+static grpc_channel_args *BuildChannelArgs(NSDictionary *dictionary) {
   if (!dictionary) {
     return NULL;
   }
@@ -108,17 +93,19 @@ grpc_channel_args * buildChannelArgs(NSDictionary *dictionary) {
 
 #ifdef GRPC_COMPILE_WITH_CRONET
 - (instancetype)initWithHost:(NSString *)host
-                cronetEngine:(cronet_engine *)cronetEngine
+                cronetEngine:(stream_engine *)cronetEngine
                  channelArgs:(NSDictionary *)channelArgs {
   if (!host) {
     [NSException raise:NSInvalidArgumentException format:@"host argument missing"];
   }
 
   if (self = [super init]) {
-    _channelArgs = buildChannelArgs(channelArgs);
+    _channelArgs = BuildChannelArgs(channelArgs);
     _host = [host copy];
-    _unmanagedChannel = grpc_cronet_secure_channel_create(cronetEngine, _host.UTF8String, _channelArgs,
-                                                     NULL);
+    _unmanagedChannel = grpc_cronet_secure_channel_create(cronetEngine,
+                                                          _host.UTF8String,
+                                                          _channelArgs,
+                                                          NULL);
   }
 
   return self;
@@ -138,7 +125,7 @@ grpc_channel_args * buildChannelArgs(NSDictionary *dictionary) {
   }
 
   if (self = [super init]) {
-    _channelArgs = buildChannelArgs(channelArgs);
+    _channelArgs = BuildChannelArgs(channelArgs);
     _host = [host copy];
     if (secure) {
       _unmanagedChannel = grpc_secure_channel_create(credentials, _host.UTF8String, _channelArgs,
@@ -155,13 +142,13 @@ grpc_channel_args * buildChannelArgs(NSDictionary *dictionary) {
   // TODO(jcanizales): Be sure to add a test with a server that closes the connection prematurely,
   // as in the past that made this call to crash.
   grpc_channel_destroy(_unmanagedChannel);
-  freeChannelArgs(_channelArgs);
+  FreeChannelArgs(_channelArgs);
 }
 
 #ifdef GRPC_COMPILE_WITH_CRONET
 + (GRPCChannel *)secureCronetChannelWithHost:(NSString *)host
                                  channelArgs:(NSDictionary *)channelArgs {
-  cronet_engine *engine = [GRPCCall cronetEngine];
+  stream_engine *engine = [GRPCCall cronetEngine];
   if (!engine) {
     [NSException raise:NSInvalidArgumentException
                 format:@"cronet_engine is NULL. Set it first."];
@@ -194,13 +181,34 @@ grpc_channel_args * buildChannelArgs(NSDictionary *dictionary) {
 }
 
 - (grpc_call *)unmanagedCallWithPath:(NSString *)path
+                          serverName:(NSString *)serverName
+                             timeout:(NSTimeInterval)timeout
                      completionQueue:(GRPCCompletionQueue *)queue {
-  return grpc_channel_create_call(_unmanagedChannel,
-                                  NULL, GRPC_PROPAGATE_DEFAULTS,
-                                  queue.unmanagedQueue,
-                                  path.UTF8String,
-                                  NULL, // Passing NULL for host
-                                  gpr_inf_future(GPR_CLOCK_REALTIME), NULL);
+  GPR_ASSERT(timeout >= 0);
+  if (timeout < 0) {
+    timeout = 0;
+  }
+  grpc_slice host_slice;
+  if (serverName) {
+    host_slice = grpc_slice_from_copied_string(serverName.UTF8String);
+  }
+  grpc_slice path_slice = grpc_slice_from_copied_string(path.UTF8String);
+  gpr_timespec deadline_ms = timeout == 0 ?
+                                gpr_inf_future(GPR_CLOCK_REALTIME) :
+                                gpr_time_add(
+                                    gpr_now(GPR_CLOCK_MONOTONIC),
+                                    gpr_time_from_millis((int64_t)(timeout * 1000), GPR_TIMESPAN));
+  grpc_call *call = grpc_channel_create_call(_unmanagedChannel,
+                                             NULL, GRPC_PROPAGATE_DEFAULTS,
+                                             queue.unmanagedQueue,
+                                             path_slice,
+                                             serverName ? &host_slice : NULL,
+                                             deadline_ms, NULL);
+  if (serverName) {
+    grpc_slice_unref(host_slice);
+  }
+  grpc_slice_unref(path_slice);
+  return call;
 }
 
 @end

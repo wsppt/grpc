@@ -1,31 +1,16 @@
-# Copyright 2015, Google Inc.
-# All rights reserved.
+# Copyright 2015 gRPC authors.
 #
-# Redistribution and use in source and binary forms, with or without
-# modification, are permitted provided that the following conditions are
-# met:
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
 #
-#     * Redistributions of source code must retain the above copyright
-# notice, this list of conditions and the following disclaimer.
-#     * Redistributions in binary form must reproduce the above
-# copyright notice, this list of conditions and the following disclaimer
-# in the documentation and/or other materials provided with the
-# distribution.
-#     * Neither the name of Google Inc. nor the names of its
-# contributors may be used to endorse or promote products derived from
-# this software without specific prior written permission.
+#     http://www.apache.org/licenses/LICENSE-2.0
 #
-# THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
-# "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
-# LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
-# A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
-# OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
-# SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
-# LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
-# DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
-# THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
-# (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
-# OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
 
 require 'forwardable'
 require_relative '../grpc'
@@ -56,18 +41,19 @@ module GRPC
     # @param unmarshal [Function] f(string)->obj that unmarshals responses
     # @param metadata_received [true|false] indicates if metadata has already
     #     been received. Should always be true for server calls
-    def initialize(call, marshal, unmarshal, metadata_received: false)
+    def initialize(call, marshal, unmarshal, metadata_received: false,
+                   req_view: nil)
       fail(ArgumentError, 'not a call') unless call.is_a? Core::Call
       @call = call
       @marshal = marshal
       @op_notifier = nil  # signals completion on clients
-      @readq = Queue.new
       @unmarshal = unmarshal
       @metadata_received = metadata_received
       @reads_complete = false
       @writes_complete = false
       @complete = false
       @done_mutex = Mutex.new
+      @req_view = req_view
     end
 
     # Begins orchestration of the Bidi stream for a client sending requests.
@@ -76,13 +62,19 @@ module GRPC
     # block that can be invoked with each response.
     #
     # @param requests the Enumerable of requests to send
-    # @op_notifier a Notifier used to signal completion
+    # @param set_input_stream_done [Proc] called back when we're done
+    #   reading the input stream
+    # @param set_input_stream_done [Proc] called back when we're done
+    #   sending data on the output stream
     # @return an Enumerator of requests to yield
-    def run_on_client(requests, op_notifier, &blk)
-      @op_notifier = op_notifier
-      @enq_th = Thread.new { write_loop(requests) }
-      @loop_th = start_read_loop
-      each_queued_msg(&blk)
+    def run_on_client(requests,
+                      set_input_stream_done,
+                      set_output_stream_done,
+                      &blk)
+      @enq_th = Thread.new do
+        write_loop(requests, set_output_stream_done: set_output_stream_done)
+      end
+      read_loop(set_input_stream_done, &blk)
     end
 
     # Begins orchestration of the Bidi stream for a server generating replies.
@@ -95,33 +87,38 @@ module GRPC
     # This does not mean that must necessarily be one.  E.g, the replies
     # produced by gen_each_reply could ignore the received_msgs
     #
-    # @param gen_each_reply [Proc] generates the BiDi stream replies.
-    def run_on_server(gen_each_reply)
-      replys = gen_each_reply.call(each_queued_msg)
-      @loop_th = start_read_loop(is_client: false)
-      write_loop(replys, is_client: false)
+    # @param [Proc] gen_each_reply generates the BiDi stream replies.
+    # @param [Enumerable] requests The enumerable of requests to run
+    def run_on_server(gen_each_reply, requests)
+      replies = nil
+
+      # Pass in the optional call object parameter if possible
+      if gen_each_reply.arity == 1
+        replies = gen_each_reply.call(requests)
+      elsif gen_each_reply.arity == 2
+        replies = gen_each_reply.call(requests, @req_view)
+      else
+        fail 'Illegal arity of reply generator'
+      end
+
+      write_loop(replies, is_client: false)
+    end
+
+    ##
+    # Read the next stream iteration
+    #
+    # @param [Proc] finalize_stream callback to call when the reads have been
+    #   completely read through.
+    # @param [Boolean] is_client If this is a client or server request
+    #
+    def read_next_loop(finalize_stream, is_client = false)
+      read_loop(finalize_stream, is_client: is_client)
     end
 
     private
 
     END_OF_READS = :end_of_reads
     END_OF_WRITES = :end_of_writes
-
-    # signals that bidi operation is complete
-    def notify_done
-      return unless @op_notifier
-      GRPC.logger.debug("bidi-notify-done: notifying  #{@op_notifier}")
-      @op_notifier.notify(self)
-    end
-
-    # signals that a bidi operation is complete (read + write)
-    def finished
-      @done_mutex.synchronize do
-        return unless @reads_complete && @writes_complete && !@complete
-        @call.close
-        @complete = true
-      end
-    end
 
     # performs a read using @call.run_batch, ensures metadata is set up
     def read_using_run_batch
@@ -135,25 +132,8 @@ module GRPC
       batch_result
     end
 
-    # each_queued_msg yields each message on this instances readq
-    #
-    # - messages are added to the readq by #read_loop
-    # - iteration ends when the instance itself is added
-    def each_queued_msg
-      return enum_for(:each_queued_msg) unless block_given?
-      count = 0
-      loop do
-        GRPC.logger.debug("each_queued_msg: waiting##{count}")
-        count += 1
-        req = @readq.pop
-        GRPC.logger.debug("each_queued_msg: req = #{req}")
-        fail req if req.is_a? StandardError
-        break if req.equal?(END_OF_READS)
-        yield req
-      end
-    end
-
-    def write_loop(requests, is_client: true)
+    # set_output_stream_done is relevant on client-side
+    def write_loop(requests, is_client: true, set_output_stream_done: nil)
       GRPC.logger.debug('bidi-write-loop: starting')
       count = 0
       requests.each do |req|
@@ -162,6 +142,7 @@ module GRPC
         payload = @marshal.call(req)
         # Fails if status already received
         begin
+          @req_view.send_initial_metadata unless @req_view.nil?
           @call.run_batch(SEND_MESSAGE => payload)
         rescue GRPC::Core::CallError => e
           # This is almost definitely caused by a status arriving while still
@@ -176,61 +157,66 @@ module GRPC
         GRPC.logger.debug("bidi-write-loop: client sent #{count}, waiting")
         @call.run_batch(SEND_CLOSE_FROM_CLIENT => nil)
         GRPC.logger.debug('bidi-write-loop: done')
-        notify_done
-        @writes_complete = true
-        finished
       end
       GRPC.logger.debug('bidi-write-loop: finished')
     rescue StandardError => e
       GRPC.logger.warn('bidi-write-loop: failed')
       GRPC.logger.warn(e)
-      notify_done
-      @writes_complete = true
-      finished
-      raise e
+      if is_client
+        @call.cancel_with_status(GRPC::Core::StatusCodes::UNKNOWN,
+                                 "GRPC bidi call error: #{e.inspect}")
+      else
+        raise e
+      end
+    ensure
+      set_output_stream_done.call if is_client
     end
 
-    # starts the read loop
-    def start_read_loop(is_client: true)
-      Thread.new do
-        GRPC.logger.debug('bidi-read-loop: starting')
-        begin
-          count = 0
-          # queue the initial read before beginning the loop
-          loop do
-            GRPC.logger.debug("bidi-read-loop: #{count}")
-            count += 1
-            batch_result = read_using_run_batch
+    # Provides an enumerator that yields results of remote reads
+    def read_loop(set_input_stream_done, is_client: true)
+      return enum_for(:read_loop,
+                      set_input_stream_done,
+                      is_client: is_client) unless block_given?
+      GRPC.logger.debug('bidi-read-loop: starting')
+      begin
+        count = 0
+        # queue the initial read before beginning the loop
+        loop do
+          GRPC.logger.debug("bidi-read-loop: #{count}")
+          count += 1
+          batch_result = read_using_run_batch
 
-            # handle the next message
-            if batch_result.message.nil?
-              GRPC.logger.debug("bidi-read-loop: null batch #{batch_result}")
+          # handle the next message
+          if batch_result.message.nil?
+            GRPC.logger.debug("bidi-read-loop: null batch #{batch_result}")
 
-              if is_client
-                batch_result = @call.run_batch(RECV_STATUS_ON_CLIENT => nil)
-                @call.status = batch_result.status
-                batch_result.check_status
-                GRPC.logger.debug("bidi-read-loop: done status #{@call.status}")
-              end
-
-              @readq.push(END_OF_READS)
-              GRPC.logger.debug('bidi-read-loop: done reading!')
-              break
+            if is_client
+              batch_result = @call.run_batch(RECV_STATUS_ON_CLIENT => nil)
+              @call.status = batch_result.status
+              @call.trailing_metadata = @call.status.metadata if @call.status
+              GRPC.logger.debug("bidi-read-loop: done status #{@call.status}")
+              batch_result.check_status
             end
 
-            # push the latest read onto the queue and continue reading
-            res = @unmarshal.call(batch_result.message)
-            @readq.push(res)
+            GRPC.logger.debug('bidi-read-loop: done reading!')
+            break
           end
-        rescue StandardError => e
-          GRPC.logger.warn('bidi: read-loop failed')
-          GRPC.logger.warn(e)
-          @readq.push(e)  # let each_queued_msg terminate with this error
+
+          res = @unmarshal.call(batch_result.message)
+          yield res
         end
-        GRPC.logger.debug('bidi-read-loop: finished')
-        @reads_complete = true
-        finished
+      rescue StandardError => e
+        GRPC.logger.warn('bidi: read-loop failed')
+        GRPC.logger.warn(e)
+        raise e
+      ensure
+        set_input_stream_done.call
       end
+      GRPC.logger.debug('bidi-read-loop: finished')
+      # Make sure that the write loop is done done before finishing the call.
+      # Note that blocking is ok at this point because we've already received
+      # a status
+      @enq_th.join if is_client
     end
   end
 end

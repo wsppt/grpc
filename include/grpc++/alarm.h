@@ -1,33 +1,18 @@
 /*
  *
- * Copyright 2015, Google Inc.
- * All rights reserved.
+ * Copyright 2015 gRPC authors.
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are
- * met:
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
  *
- *     * Redistributions of source code must retain the above copyright
- * notice, this list of conditions and the following disclaimer.
- *     * Redistributions in binary form must reproduce the above
- * copyright notice, this list of conditions and the following disclaimer
- * in the documentation and/or other materials provided with the
- * distribution.
- *     * Neither the name of Google Inc. nor the names of its
- * contributors may be used to endorse or promote products derived from
- * this software without specific prior written permission.
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
- * "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
- * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
- * A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
- * OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
- * SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
- * LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
- * DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
- * THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
- * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  *
  */
 
@@ -52,33 +37,66 @@ class CompletionQueue;
 /// A thin wrapper around \a grpc_alarm (see / \a / src/core/surface/alarm.h).
 class Alarm : private GrpcLibraryCodegen {
  public:
-  /// Create a completion queue alarm instance associated to \a cq.
-  ///
-  /// Once the alarm expires (at \a deadline) or it's cancelled (see \a Cancel),
-  /// an event with tag \a tag will be added to \a cq. If the alarm expired, the
-  /// event's success bit will be true, false otherwise (ie, upon cancellation).
+  /// Create an unset completion queue alarm
+  Alarm() : tag_(nullptr), alarm_(grpc_alarm_create(nullptr)) {}
+
+  /// DEPRECATED: Create and set a completion queue alarm instance associated to
+  /// \a cq.
+  /// This form is deprecated because it is inherently racy.
   /// \internal We rely on the presence of \a cq for grpc initialization. If \a
   /// cq were ever to be removed, a reference to a static
   /// internal::GrpcLibraryInitializer instance would need to be introduced
   /// here. \endinternal.
   template <typename T>
   Alarm(CompletionQueue* cq, const T& deadline, void* tag)
-      : tag_(tag),
-        alarm_(grpc_alarm_create(cq->cq(), TimePoint<T>(deadline).raw_time(),
-                                 static_cast<void*>(&tag_))) {}
+      : tag_(tag), alarm_(grpc_alarm_create(nullptr)) {
+    grpc_alarm_set(alarm_, cq->cq(), TimePoint<T>(deadline).raw_time(),
+                   static_cast<void*>(&tag_), nullptr);
+  }
+
+  /// Trigger an alarm instance on completion queue \a cq at the specified time.
+  /// Once the alarm expires (at \a deadline) or it's cancelled (see \a Cancel),
+  /// an event with tag \a tag will be added to \a cq. If the alarm expired, the
+  /// event's success bit will be true, false otherwise (ie, upon cancellation).
+  template <typename T>
+  void Set(CompletionQueue* cq, const T& deadline, void* tag) {
+    tag_.Set(tag);
+    grpc_alarm_set(alarm_, cq->cq(), TimePoint<T>(deadline).raw_time(),
+                   static_cast<void*>(&tag_), nullptr);
+  }
+
+  /// Alarms aren't copyable.
+  Alarm(const Alarm&) = delete;
+  Alarm& operator=(const Alarm&) = delete;
+
+  /// Alarms are movable.
+  Alarm(Alarm&& rhs) : tag_(rhs.tag_), alarm_(rhs.alarm_) {
+    rhs.alarm_ = nullptr;
+  }
+  Alarm& operator=(Alarm&& rhs) {
+    tag_ = rhs.tag_;
+    alarm_ = rhs.alarm_;
+    rhs.alarm_ = nullptr;
+    return *this;
+  }
 
   /// Destroy the given completion queue alarm, cancelling it in the process.
-  ~Alarm() { grpc_alarm_destroy(alarm_); }
+  ~Alarm() {
+    if (alarm_ != nullptr) grpc_alarm_destroy(alarm_, nullptr);
+  }
 
   /// Cancel a completion queue alarm. Calling this function over an alarm that
   /// has already fired has no effect.
-  void Cancel() { grpc_alarm_cancel(alarm_); }
+  void Cancel() {
+    if (alarm_ != nullptr) grpc_alarm_cancel(alarm_, nullptr);
+  }
 
  private:
-  class AlarmEntry : public CompletionQueueTag {
+  class AlarmEntry : public internal::CompletionQueueTag {
    public:
     AlarmEntry(void* tag) : tag_(tag) {}
-    bool FinalizeResult(void** tag, bool* status) GRPC_OVERRIDE {
+    void Set(void* tag) { tag_ = tag; }
+    bool FinalizeResult(void** tag, bool* status) override {
       *tag = tag_;
       return true;
     }
@@ -88,7 +106,7 @@ class Alarm : private GrpcLibraryCodegen {
   };
 
   AlarmEntry tag_;
-  grpc_alarm* const alarm_;  // owned
+  grpc_alarm* alarm_;  // owned
 };
 
 }  // namespace grpc
