@@ -117,7 +117,7 @@ typedef struct {
 static gpr_once init_openssl_once = GPR_ONCE_INIT;
 static gpr_mu* openssl_mutexes = nullptr;
 
-static void openssl_locking_cb(int mode, int type, const char* file, int line) {
+static void openssl_locking_cb(int mode, int type, const char *file, int line) {  
   if (mode & CRYPTO_LOCK) {
     gpr_mu_lock(&openssl_mutexes[type]);
   } else {
@@ -141,6 +141,8 @@ static void init_openssl(void) {
   for (i = 0; i < CRYPTO_num_locks(); i++) {
     gpr_mu_init(&openssl_mutexes[i]);
   }
+  (void) openssl_locking_cb;
+  (void) openssl_thread_id_cb;
   CRYPTO_set_locking_callback(openssl_locking_cb);
   CRYPTO_set_id_callback(openssl_thread_id_cb);
 }
@@ -1361,8 +1363,10 @@ tsi_result tsi_create_ssl_client_handshaker_factory(
   *factory = nullptr;
   if (pem_root_certs == nullptr) return TSI_INVALID_ARGUMENT;
 
-  ssl_context = SSL_CTX_new(TLSv1_2_method());
-  if (ssl_context == nullptr) {
+  ssl_context = SSL_CTX_new(TLS_method());
+  if (ssl_context == nullptr ||
+      !SSL_CTX_set_min_proto_version(ssl_context, TLS1_2_VERSION) ||
+      !SSL_CTX_set_max_proto_version(ssl_context, TLS1_2_VERSION)) {
     gpr_log(GPR_ERROR, "Could not create ssl context.");
     return TSI_INVALID_ARGUMENT;
   }
@@ -1479,8 +1483,12 @@ tsi_result tsi_create_ssl_server_handshaker_factory_ex(
 
   for (i = 0; i < num_key_cert_pairs; i++) {
     do {
-      impl->ssl_contexts[i] = SSL_CTX_new(TLSv1_2_method());
-      if (impl->ssl_contexts[i] == nullptr) {
+      impl->ssl_contexts[i] = SSL_CTX_new(TLS_method());
+      if (impl->ssl_contexts[i] == nullptr ||
+          !SSL_CTX_set_min_proto_version(impl->ssl_contexts[i],
+                                         TLS1_2_VERSION) ||
+          !SSL_CTX_set_max_proto_version(impl->ssl_contexts[i],
+                                         TLS1_2_VERSION)) {
         gpr_log(GPR_ERROR, "Could not create ssl context.");
         result = TSI_OUT_OF_RESOURCES;
         break;
