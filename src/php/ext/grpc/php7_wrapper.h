@@ -154,7 +154,7 @@ static inline int php_grpc_zend_hash_find(HashTable *ht, char *key, int len,
 #define RETURN_DESTROY_ZVAL(val) \
   RETVAL_ZVAL(val, false /* Don't execute copy constructor */, \
               true /* Dealloc original before returning */); \
-  efree(val); \
+  grpc_globals.g_alloc_functions.free_fn(val); \
   return
 
 #define PHP_GRPC_WRAP_OBJECT_START(name) \

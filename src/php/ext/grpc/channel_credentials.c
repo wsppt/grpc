@@ -152,7 +152,7 @@ PHP_METHOD(ChannelCredentials, createSsl) {
   }
 
   php_grpc_int hashkey_len = root_certs_length + cert_chain_length;
-  char *hashkey = emalloc(hashkey_len);
+  char *hashkey = grpc_globals.g_alloc_functions.malloc_fn(hashkey_len);
   if (root_certs_length > 0) {
     strcpy(hashkey, pem_root_certs);
   }
@@ -168,7 +168,7 @@ PHP_METHOD(ChannelCredentials, createSsl) {
       pem_key_cert_pair.private_key == NULL ? NULL : &pem_key_cert_pair, NULL);
   zval *creds_object = grpc_php_wrap_channel_credentials(creds, hashstr, false
                                                          TSRMLS_CC);
-  efree(hashkey);
+  grpc_globals.g_alloc_functions.free_fn(hashkey);
   RETURN_DESTROY_ZVAL(creds_object);
 }
 

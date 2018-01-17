@@ -54,6 +54,8 @@ static zend_object_handlers channel_ce_handlers;
 static gpr_mu global_persistent_list_mu;
 int le_plink;
 
+extern zend_grpc_globals grpc_globals;
+
 /* Frees and destroys an instance of wrapped_grpc_channel */
 PHP_GRPC_FREE_WRAPPED_FUNC_START(wrapped_grpc_channel)
   if (p->wrapper != NULL) {
@@ -96,7 +98,8 @@ int php_grpc_read_args_array(zval *args_array,
     return FAILURE;
   }
   args->num_args = zend_hash_num_elements(array_hash);
-  args->args = ecalloc(args->num_args, sizeof(grpc_arg));
+  php_printf("check: %d \n", grpc_globals.g_alloc_functions.check);
+  args->args = grpc_globals.g_alloc_functions.calloc_fn(args->num_args, sizeof(grpc_arg));
   args_index = 0;
 
   char *key = NULL;
@@ -151,7 +154,8 @@ void create_channel(
     channel->wrapper->wrapped =
         grpc_secure_channel_create(creds->wrapped, target, &args, NULL);
   }
-  efree(args.args);
+  php_printf("check: %d \n", grpc_globals.g_alloc_functions.check);
+  grpc_globals.g_alloc_functions.free_fn(args.args);
 }
 
 void create_and_add_channel_to_persistent_list(
