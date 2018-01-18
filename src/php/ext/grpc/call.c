@@ -101,6 +101,7 @@ zval *grpc_parse_metadata_array(grpc_metadata_array
                              1 TSRMLS_CC);
         grpc_globals.g_alloc_functions.free_fn(str_key);
         grpc_globals.g_alloc_functions.free_fn(str_val);
+        PHP_GRPC_FREE_STD_ZVAL(array);
         return NULL;
       }
       php_grpc_add_next_index_stringl(data, str_val,

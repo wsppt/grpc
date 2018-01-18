@@ -45,6 +45,8 @@ static zend_object_handlers channel_credentials_ce_handlers;
 #endif
 static char *default_pem_root_certs = NULL;
 
+extern zend_grpc_globals grpc_globals;
+
 static grpc_ssl_roots_override_result get_ssl_roots_override(
     char **pem_root_certs) {
   if (!default_pem_root_certs) {

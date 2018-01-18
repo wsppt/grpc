@@ -246,6 +246,7 @@ PHP_METHOD(Channel, __construct) {
 
   // parse the rest of the channel args array
   if (php_grpc_read_args_array(args_array, &args TSRMLS_CC) == FAILURE) {
+    grpc_globals.g_alloc_functions.free_fn(args.args);
     return;
   }
 
@@ -305,6 +306,9 @@ PHP_METHOD(Channel, __construct) {
       create_and_add_channel_to_persistent_list(
           channel, target, args, creds, key, key_len TSRMLS_CC);
     } else {
+//      free(channel->wrapper->key);
+//      free(channel->wrapper);
+      grpc_globals.g_alloc_functions.free_fn(args.args);
       channel->wrapper = le->channel;
     }
   }
@@ -323,8 +327,9 @@ PHP_METHOD(Channel, getTarget) {
     gpr_mu_unlock(&channel->wrapper->mu);
     return;
   }
-  char *target = grpc_channel_get_target(channel->wrapper->wrapped);
+  const char *target = grpc_channel_get_target(channel->wrapper->wrapped);
   gpr_mu_unlock(&channel->wrapper->mu);
+//  zend_string *str = zend_string_init(target, sizeof(target), 0);
   PHP_GRPC_RETURN_STRING(target, 1);
 }
 
@@ -427,6 +432,16 @@ PHP_METHOD(Channel, close) {
   gpr_mu_unlock(&channel->wrapper->mu);
 }
 
+PHP_METHOD(Channel, __destruct) {
+//  wrapped_grpc_channel *channel = Z_WRAPPED_GRPC_CHANNEL_P(getThis());
+//  if(channel->wrapper->key){
+//    free(channel->wrapper->key);
+//  }
+//  if(channel->wrapper){
+//    free(channel->wrapper);
+//  }
+}
+
 // Delete an entry from the persistent list
 // Note: this does not destroy or close the underlying grpc_channel
 void php_grpc_delete_persistent_list_entry(char *key, php_grpc_int key_len
@@ -439,6 +454,7 @@ void php_grpc_delete_persistent_list_entry(char *key, php_grpc_int key_len
     le = (channel_persistent_le_t *)rsrc->ptr;
     le->channel = NULL;
     php_grpc_zend_hash_del(&EG(persistent_list), key, key_len+1);
+    free(key);
   }
   gpr_mu_unlock(&global_persistent_list_mu);
 }
@@ -463,6 +479,9 @@ ZEND_BEGIN_ARG_INFO_EX(arginfo_construct, 0, 0, 2)
   ZEND_ARG_INFO(0, args)
 ZEND_END_ARG_INFO()
 
+ZEND_BEGIN_ARG_INFO_EX(arginfo_destruct, 0, 0, 0)
+ZEND_END_ARG_INFO()
+
 ZEND_BEGIN_ARG_INFO_EX(arginfo_getTarget, 0, 0, 0)
 ZEND_END_ARG_INFO()
 
@@ -480,6 +499,8 @@ ZEND_END_ARG_INFO()
 
 static zend_function_entry channel_methods[] = {
   PHP_ME(Channel, __construct, arginfo_construct,
+         ZEND_ACC_PUBLIC | ZEND_ACC_CTOR)
+  PHP_ME(Channel, __destruct, arginfo_destruct,
          ZEND_ACC_PUBLIC | ZEND_ACC_CTOR)
   PHP_ME(Channel, getTarget, arginfo_getTarget,
          ZEND_ACC_PUBLIC)
@@ -503,3 +524,4 @@ GRPC_STARTUP_FUNCTION(channel) {
   PHP_GRPC_INIT_HANDLER(wrapped_grpc_channel, channel_ce_handlers);
   return SUCCESS;
 }
+
