@@ -175,7 +175,7 @@ static inline int php_grpc_zend_hash_find(HashTable *ht, char *key, int len,
 
 #define PHP_GRPC_ALLOC_CLASS_OBJECT(class_object) \
   class_object *intern; \
-  intern = calloc(1, sizeof(class_object) + \
+  intern = ecalloc(1, sizeof(class_object) + \
                    zend_object_properties_size(class_type));
 
 #define PHP_GRPC_FREE_CLASS_OBJECT(class_object, handler) \
