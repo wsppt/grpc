@@ -59,25 +59,39 @@ extern zend_grpc_globals grpc_globals;
 /* Frees and destroys an instance of wrapped_grpc_channel */
 PHP_GRPC_FREE_WRAPPED_FUNC_START(wrapped_grpc_channel)
   php_printf("PHP_GRPC_FREE_WRAPPED_FUNC_START\n");
+  bool is_last_wrapper = false;
   if (p->wrapper != NULL) {
     php_printf("PHP_GRPC_FREE_WRAPPED_FUNC_START\n");
     gpr_mu_lock(&p->wrapper->mu);
     if (p->wrapper->wrapped != NULL) {
-      php_printf("PHP_GRPC_FREE_WRAPPED_FUNC_START\n");
-      php_grpc_zend_resource *rsrc;
-      php_grpc_int key_len = strlen(p->wrapper->key);
-      // only destroy the channel here if not found in the persistent list
-      gpr_mu_lock(&global_persistent_list_mu);
-      if (!(PHP_GRPC_PERSISTENT_LIST_FIND(&EG(persistent_list), p->wrapper->key,
-                                          key_len, rsrc))) {
+      if(p->wrapper->is_valid){
         php_printf("PHP_GRPC_FREE_WRAPPED_FUNC_START\n");
-        grpc_channel_destroy(p->wrapper->wrapped);
-        free(p->wrapper->target);
-        free(p->wrapper->args_hashstr);
+        php_grpc_zend_resource *rsrc;
+        php_grpc_int key_len = strlen(p->wrapper->key);
+        // only destroy the channel here if not found in the persistent list
+        gpr_mu_lock(&global_persistent_list_mu);
+        if (!(PHP_GRPC_PERSISTENT_LIST_FIND(&EG(persistent_list), p->wrapper->key,
+                                            key_len, rsrc))) {
+          php_printf("PHP_GRPC_FREE_WRAPPED_FUNC_STARTxxxx\n");
+          grpc_channel_destroy(p->wrapper->wrapped);
+          free(p->wrapper->target);
+          free(p->wrapper->args_hashstr);
+        }
+        gpr_mu_unlock(&global_persistent_list_mu);
       }
-      gpr_mu_unlock(&global_persistent_list_mu);
+    }
+    p->wrapper->wrapper_count -= 1;
+    if(p->wrapper->wrapper_count == 0){
+          is_last_wrapper = true;
     }
     gpr_mu_unlock(&p->wrapper->mu);
+    if(is_last_wrapper) {
+       php_printf("should be freed\n");
+       gpr_mu_destroy(&p->wrapper->mu);
+       free(p->wrapper->key);
+       free(p->wrapper);
+    }
+    p->wrapper = NULL;
   }
 PHP_GRPC_FREE_WRAPPED_FUNC_END()
 
@@ -444,6 +458,7 @@ PHP_METHOD(Channel, close) {
   wrapped_grpc_channel *channel = Z_WRAPPED_GRPC_CHANNEL_P(getThis());
   bool is_last_wrapper = false;
   if (channel->wrapper != NULL) {
+    php_printf("channel->wrapper != NULL\n");
     gpr_mu_lock(&channel->wrapper->mu);
     if (channel->wrapper->wrapped != NULL) {
       if(channel->wrapper->is_valid){
@@ -457,11 +472,11 @@ PHP_METHOD(Channel, close) {
                                               TSRMLS_CC);
         channel->wrapper->is_valid = false;
       }
-      channel->wrapper->wrapper_count -= 1;
-      php_printf("channel->wrapper->wrapper_count: %d\n",channel->wrapper->wrapper_count);
-      if(channel->wrapper->wrapper_count == 0){
-        is_last_wrapper = true;
-      }
+    }
+    channel->wrapper->wrapper_count -= 1;
+    php_printf("channel->wrapper->wrapper_count: %d\n",channel->wrapper->wrapper_count);
+    if(channel->wrapper->wrapper_count == 0){
+      is_last_wrapper = true;
     }
     gpr_mu_unlock(&channel->wrapper->mu);
   }
@@ -469,6 +484,7 @@ PHP_METHOD(Channel, close) {
   // thus let the last channel free it.
   gpr_mu_lock(&global_persistent_list_mu);
   if(is_last_wrapper) {
+    php_printf("xxxxxxxxxxxxxxxxxxxxxxxxxxxxx\n");
     gpr_mu_destroy(&channel->wrapper->mu);
     free(channel->wrapper->key);
     free(channel->wrapper);
