@@ -64,21 +64,21 @@ PHP_GRPC_FREE_WRAPPED_FUNC_START(wrapped_grpc_channel)
     php_printf("PHP_GRPC_FREE_WRAPPED_FUNC_START\n");
     gpr_mu_lock(&p->wrapper->mu);
     if (p->wrapper->wrapped != NULL) {
-      if(p->wrapper->is_valid){
-        php_printf("PHP_GRPC_FREE_WRAPPED_FUNC_START\n");
-        php_grpc_zend_resource *rsrc;
-        php_grpc_int key_len = strlen(p->wrapper->key);
+//      if(p->wrapper->is_valid){
+//        php_printf("PHP_GRPC_FREE_WRAPPED_FUNC_START\n");
+//        php_grpc_zend_resource *rsrc;
+//        php_grpc_int key_len = strlen(p->wrapper->key);
         // only destroy the channel here if not found in the persistent list
         gpr_mu_lock(&global_persistent_list_mu);
-        if (!(PHP_GRPC_PERSISTENT_LIST_FIND(&EG(persistent_list), p->wrapper->key,
-                                            key_len, rsrc))) {
-          php_printf("PHP_GRPC_FREE_WRAPPED_FUNC_STARTxxxx\n");
+//        if (p->wrapper->wrapper_count == ) {
+          php_printf("PHP_GRPC_PERSISTENT_LIST_FIND\n %s\n", p->wrapper->key);
           grpc_channel_destroy(p->wrapper->wrapped);
+          p->wrapper->wrapped = NULL;
           free(p->wrapper->target);
           free(p->wrapper->args_hashstr);
-        }
+//        }
         gpr_mu_unlock(&global_persistent_list_mu);
-      }
+//      }
     }
     p->wrapper->wrapper_count -= 1;
     if(p->wrapper->wrapper_count == 0){
@@ -90,7 +90,9 @@ PHP_GRPC_FREE_WRAPPED_FUNC_START(wrapped_grpc_channel)
        gpr_mu_destroy(&p->wrapper->mu);
        free(p->wrapper->key);
        free(p->wrapper);
+       php_printf("a\n");
     }
+    php_printf("b\n");
     p->wrapper = NULL;
   }
 PHP_GRPC_FREE_WRAPPED_FUNC_END()
@@ -297,6 +299,7 @@ PHP_METHOD(Channel, __construct) {
   }
   channel->wrapper = malloc(sizeof(grpc_channel_wrapper));
   channel->wrapper->key = key;
+  php_printf("key: %s \n", key);
   channel->wrapper->target = strdup(target);
   channel->wrapper->args_hashstr = strdup(sha1str);
   channel->wrapper->is_valid = true;
@@ -461,7 +464,7 @@ PHP_METHOD(Channel, close) {
     php_printf("channel->wrapper != NULL\n");
     gpr_mu_lock(&channel->wrapper->mu);
     if (channel->wrapper->wrapped != NULL) {
-      if(channel->wrapper->is_valid){
+      //if(channel->wrapper->is_valid){
         grpc_channel_destroy(channel->wrapper->wrapped);
         free(channel->wrapper->target);
         free(channel->wrapper->args_hashstr);
@@ -470,8 +473,8 @@ PHP_METHOD(Channel, close) {
         php_grpc_delete_persistent_list_entry(channel->wrapper->key,
                                               strlen(channel->wrapper->key)
                                               TSRMLS_CC);
-        channel->wrapper->is_valid = false;
-      }
+      //  channel->wrapper->is_valid = false;
+      //}
     }
     channel->wrapper->wrapper_count -= 1;
     php_printf("channel->wrapper->wrapper_count: %d\n",channel->wrapper->wrapper_count);
@@ -489,6 +492,7 @@ PHP_METHOD(Channel, close) {
     free(channel->wrapper->key);
     free(channel->wrapper);
   }
+  // since channel->wrapper = NULL, each channel wrapper can only delete count once.
   channel->wrapper = NULL;
   gpr_mu_unlock(&global_persistent_list_mu);
   php_printf("Channel, close end\n");
@@ -516,7 +520,7 @@ void php_grpc_delete_persistent_list_entry(char *key, php_grpc_int key_len
   gpr_mu_lock(&global_persistent_list_mu);
   if (PHP_GRPC_PERSISTENT_LIST_FIND(&EG(persistent_list), key,
                                     key_len, rsrc)) {
-    php_printf("PHP_GRPC_PERSISTENT_LIST_FIND\n");
+    php_printf("PHP_GRPC_PERSISTENT_LIST_FIND\n %s\n", key);
     channel_persistent_le_t *le;
     le = (channel_persistent_le_t *)rsrc->ptr;
     //free(le->channel);
