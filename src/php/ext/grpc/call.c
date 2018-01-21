@@ -546,7 +546,10 @@ cleanup:
  */
 PHP_METHOD(Call, getPeer) {
   wrapped_grpc_call *call = Z_WRAPPED_GRPC_CALL_P(getThis());
-  PHP_GRPC_RETURN_STRING(grpc_call_get_peer(call->wrapped), 1);
+  char* peer = grpc_call_get_peer(call->wrapped);
+  RETVAL_STRING(peer);
+  gpr_free(peer);
+  // PHP_GRPC_RETURN_STRING(grpc_call_get_peer(call->wrapped), 1);
 }
 
 /**

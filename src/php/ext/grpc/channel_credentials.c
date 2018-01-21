@@ -59,8 +59,14 @@ static grpc_ssl_roots_override_result get_ssl_roots_override(
 
 /* Frees and destroys an instance of wrapped_grpc_channel_credentials */
 PHP_GRPC_FREE_WRAPPED_FUNC_START(wrapped_grpc_channel_credentials)
-  if (p->wrapped != NULL) {
+  php_printf("PHP_GRPC_FREE_WRAPPED_FUNC_START credentials\n");
+  if(p->hashstr != NULL){
+    php_printf("p->hashstr != NULL\n");
     free(p->hashstr);
+    p->hashstr = NULL;
+  }
+  if (p->wrapped != NULL) {
+    php_printf("p->wrapped != NULL\n");
     grpc_channel_credentials_release(p->wrapped);
     p->wrapped = NULL;
   }
@@ -203,8 +209,12 @@ PHP_METHOD(ChannelCredentials, createComposite) {
   grpc_channel_credentials *creds =
       grpc_composite_channel_credentials_create(cred1->wrapped, cred2->wrapped,
                                                 NULL);
+  // It is easier wrapped_grpc_channel_credentials object keeps it's own allocation,
+  php_grpc_int cred1_len = strlen(cred1->hashstr);
+  char *cred1_hashstr = malloc(cred1_len+1);
+  strcpy(cred1_hashstr, cred1->hashstr);
   zval *creds_object =
-      grpc_php_wrap_channel_credentials(creds, cred1->hashstr, true
+      grpc_php_wrap_channel_credentials(creds, cred1_hashstr, true
                                         TSRMLS_CC);
   RETURN_DESTROY_ZVAL(creds_object);
 }
