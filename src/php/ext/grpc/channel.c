@@ -465,6 +465,7 @@ PHP_METHOD(Channel, close) {
         free(channel->wrapper->target);
         free(channel->wrapper->args_hashstr);
         channel->wrapper->wrapped = NULL;
+        channel->wrapper->is_valid = false;
 
         php_grpc_delete_persistent_list_entry(channel->wrapper->key,
                                               strlen(channel->wrapper->key)
