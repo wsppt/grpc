@@ -75,6 +75,10 @@ PHP_GRPC_FREE_WRAPPED_FUNC_START(wrapped_grpc_channel)
           grpc_channel_destroy(p->wrapper->wrapped);
           free(p->wrapper->target);
           free(p->wrapper->args_hashstr);
+          if(p->wrapper->creds_hashstr != NULL){
+            free(p->wrapper->creds_hashstr);
+            p->wrapper->creds_hashstr = NULL;
+          }
         }
         gpr_mu_unlock(&global_persistent_list_mu);
       }
@@ -95,6 +99,10 @@ PHP_GRPC_FREE_WRAPPED_FUNC_START(wrapped_grpc_channel)
           grpc_channel_destroy(p->wrapper->wrapped);
           free(p->wrapper->target);
           free(p->wrapper->args_hashstr);
+          if(p->wrapper->creds_hashstr != NULL){
+            free(p->wrapper->creds_hashstr);
+            p->wrapper->creds_hashstr = NULL;
+          }
           p->wrapper->wrapped = NULL;
           php_grpc_delete_persistent_list_entry(p->wrapper->key,
                                                 strlen(p->wrapper->key)
@@ -313,8 +321,12 @@ PHP_METHOD(Channel, __construct) {
   channel->wrapper->args_hashstr = strdup(sha1str);
   channel->wrapper->ref_count = 1;
   channel->wrapper->is_valid = true;
+  channel->wrapper->creds_hashstr = NULL;
   if (creds != NULL && creds->hashstr != NULL) {
-    channel->wrapper->creds_hashstr = creds->hashstr;
+    php_grpc_int creds_hashstr_len = strlen(creds->hashstr);
+    char *channel_creds_hashstr = malloc(creds_hashstr_len + 1);
+    strcpy(channel_creds_hashstr, creds->hashstr);
+    channel->wrapper->creds_hashstr = channel_creds_hashstr;
   }
   gpr_mu_init(&channel->wrapper->mu);
   smart_str_free(&buf);
@@ -343,6 +355,7 @@ PHP_METHOD(Channel, __construct) {
       free(channel->wrapper->key);
       free(channel->wrapper->target);
       free(channel->wrapper->args_hashstr);
+      free(channel->wrapper->creds_hashstr);
       free(channel->wrapper);
       channel->wrapper = le->channel;
       channel->wrapper->ref_count += 1;
@@ -365,7 +378,7 @@ PHP_METHOD(Channel, getTarget) {
   }
   char *target = grpc_channel_get_target(channel->wrapper->wrapped);
   gpr_mu_unlock(&channel->wrapper->mu);
-  RETVAL_STRING(target);
+  PHP_GRPC_RETVAL_STRING(target, 1);
   gpr_free(target);
 }
 
@@ -464,7 +477,12 @@ PHP_METHOD(Channel, close) {
         // wrapper->key and wrapper itself are freed until ref_count=0
         free(channel->wrapper->target);
         free(channel->wrapper->args_hashstr);
+        if(channel->wrapper->creds_hashstr != NULL){
+          free(channel->wrapper->creds_hashstr);
+          channel->wrapper->creds_hashstr = NULL;
+        }
         channel->wrapper->wrapped = NULL;
+        channel->wrapper->is_valid = false;
 
         php_grpc_delete_persistent_list_entry(channel->wrapper->key,
                                               strlen(channel->wrapper->key)
