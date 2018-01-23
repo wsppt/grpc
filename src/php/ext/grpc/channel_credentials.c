@@ -57,11 +57,14 @@ static grpc_ssl_roots_override_result get_ssl_roots_override(
 
 /* Frees and destroys an instance of wrapped_grpc_channel_credentials */
 PHP_GRPC_FREE_WRAPPED_FUNC_START(wrapped_grpc_channel_credentials)
-  if (p->hashstr != NULL) {
-    free(p->hashstr);
-    p->hashstr = NULL;
-  }
+php_printf("PHP_GRPC_FREE_WRAPPED_FUNC_START\n");
+//  if (p->hashstr != NULL) {
+//    free(p->hashstr);
+//    p->hashstr = NULL;
+//  }
   if (p->wrapped != NULL) {
+//    free(p->hashstr);
+//    p->hashstr = NULL;
     grpc_channel_credentials_release(p->wrapped);
     p->wrapped = NULL;
   }
@@ -133,6 +136,7 @@ PHP_METHOD(ChannelCredentials, createDefault) {
  * @return ChannelCredentials The new SSL credentials object
  */
 PHP_METHOD(ChannelCredentials, createSsl) {
+php_printf("createSsl\n");
   char *pem_root_certs = NULL;
   grpc_ssl_pem_key_cert_pair pem_key_cert_pair;
 
@@ -173,6 +177,7 @@ PHP_METHOD(ChannelCredentials, createSsl) {
       pem_key_cert_pair.private_key == NULL ? NULL : &pem_key_cert_pair, NULL);
   zval *creds_object = grpc_php_wrap_channel_credentials(creds, hashstr, false
                                                          TSRMLS_CC);
+  php_printf("createSsl: %s\n", hashstr);
   efree(hashkey);
   RETURN_DESTROY_ZVAL(creds_object);
 }
@@ -184,6 +189,7 @@ PHP_METHOD(ChannelCredentials, createSsl) {
  * @return ChannelCredentials The new composite credentials object
  */
 PHP_METHOD(ChannelCredentials, createComposite) {
+php_printf("createComposite\n");
   zval *cred1_obj;
   zval *cred2_obj;
 

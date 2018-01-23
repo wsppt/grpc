@@ -78,6 +78,7 @@ zval *grpc_php_wrap_call_credentials(grpc_call_credentials
  * @return CallCredentials The new composite credentials object
  */
 PHP_METHOD(CallCredentials, createComposite) {
+  php_printf("createCompositen\n");
   zval *cred1_obj;
   zval *cred2_obj;
 
@@ -107,6 +108,7 @@ PHP_METHOD(CallCredentials, createComposite) {
  * @return CallCredentials The new call credentials object
  */
 PHP_METHOD(CallCredentials, createFromPlugin) {
+  php_printf("createFromPlugin\n");
   zend_fcall_info *fci;
   zend_fcall_info_cache *fci_cache;
 
