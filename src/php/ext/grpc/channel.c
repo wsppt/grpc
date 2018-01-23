@@ -365,7 +365,7 @@ PHP_METHOD(Channel, getTarget) {
   }
   char *target = grpc_channel_get_target(channel->wrapper->wrapped);
   gpr_mu_unlock(&channel->wrapper->mu);
-  RETVAL_STRING(target);
+  PHP_GRPC_RETVAL_STRING(target, 1);
   gpr_free(target);
 }
 
