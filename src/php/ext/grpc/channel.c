@@ -75,6 +75,10 @@ PHP_GRPC_FREE_WRAPPED_FUNC_START(wrapped_grpc_channel)
           grpc_channel_destroy(p->wrapper->wrapped);
           free(p->wrapper->target);
           free(p->wrapper->args_hashstr);
+          if(p->wrapper->creds_hashstr != NULL){
+            free(p->wrapper->creds_hashstr);
+            p->wrapper->creds_hashstr = NULL;
+          }
         }
         gpr_mu_unlock(&global_persistent_list_mu);
       }
@@ -232,7 +236,6 @@ void create_and_add_channel_to_persistent_list(
  * @param array $args_array The arguments to pass to the Channel
  */
 PHP_METHOD(Channel, __construct) {
-php_printf("php_create_channel\n");
   wrapped_grpc_channel *channel = Z_WRAPPED_GRPC_CHANNEL_P(getThis());
   zval *creds_obj = NULL;
   char *target;
@@ -300,7 +303,6 @@ php_printf("php_create_channel\n");
                     PHP_GRPC_SERIALIZED_BUF_LEN(buf));
 
   php_grpc_int key_len = target_length + strlen(sha1str);
-  php_printf("strlen %d\n", strlen(sha1str));
   if (creds != NULL && creds->hashstr != NULL) {
     key_len += strlen(creds->hashstr);
   }
@@ -308,7 +310,6 @@ php_printf("php_create_channel\n");
   strcpy(key, target);
   strcat(key, sha1str);
   if (creds != NULL && creds->hashstr != NULL) {
-    php_printf("construct: %s\n", creds->hashstr);
     strcat(key, creds->hashstr);
   }
   channel->wrapper = malloc(sizeof(grpc_channel_wrapper));
@@ -317,8 +318,12 @@ php_printf("php_create_channel\n");
   channel->wrapper->args_hashstr = strdup(sha1str);
   channel->wrapper->ref_count = 1;
   channel->wrapper->is_valid = true;
+  channel->wrapper->creds_hashstr = NULL;
   if (creds != NULL && creds->hashstr != NULL) {
-    channel->wrapper->creds_hashstr = creds->hashstr;
+    php_grpc_int creds_hashstr_len = strlen(creds->hashstr);
+    char *channel_creds_hashstr = malloc(creds_hashstr_len + 1);
+    strcpy(channel_creds_hashstr, creds->hashstr);
+    channel->wrapper->creds_hashstr = channel_creds_hashstr;
   }
   gpr_mu_init(&channel->wrapper->mu);
   smart_str_free(&buf);
@@ -327,30 +332,22 @@ php_printf("php_create_channel\n");
     // If the ChannelCredentials object was composed with a CallCredentials
     // object, there is no way we can tell them apart. Do NOT persist
     // them. They should be individually destroyed.
-    php_printf("xxx\n");
     create_channel(channel, target, args, creds);
   } else if (!(PHP_GRPC_PERSISTENT_LIST_FIND(&EG(persistent_list), key,
                                              key_len, rsrc))) {
-    php_printf("bbb\n");
     create_and_add_channel_to_persistent_list(
         channel, target, args, creds, key, key_len TSRMLS_CC);
   } else {
     // Found a previously stored channel in the persistent list
     channel_persistent_le_t *le = (channel_persistent_le_t *)rsrc->ptr;
-    php_printf("ccc %s %s \n", creds->hashstr, le->channel->creds_hashstr);
-    if(strcmp(creds->hashstr, le->channel->creds_hashstr) != 0){
-      php_printf("uuuuuuuuuuuuuuuuuuuuuuuuuuuu\n");
-    }
     if (strcmp(target, le->channel->target) != 0 ||
         strcmp(sha1str, le->channel->args_hashstr) != 0 ||
         (creds != NULL && creds->hashstr != NULL &&
          strcmp(creds->hashstr, le->channel->creds_hashstr) != 0)) {
       // somehow hash collision
-      php_printf("strlen %d\n", strlen(le->channel->args_hashstr));
       create_and_add_channel_to_persistent_list(
           channel, target, args, creds, key, key_len TSRMLS_CC);
     } else {
-      php_printf("strlen %d, %d\n", strlen(creds->hashstr), strlen(le->channel->args_hashstr));
       efree(args.args);
       free(channel->wrapper->key);
       free(channel->wrapper->target);
@@ -477,7 +474,10 @@ PHP_METHOD(Channel, close) {
         // wrapper->key and wrapper itself are freed until ref_count=0
         free(channel->wrapper->target);
         free(channel->wrapper->args_hashstr);
-        free(channel->wrapper->creds_hashstr);
+        if(channel->wrapper->creds_hashstr != NULL){
+          free(channel->wrapper->creds_hashstr);
+          channel->wrapper->creds_hashstr = NULL;
+        }
         channel->wrapper->wrapped = NULL;
         channel->wrapper->is_valid = false;
 
