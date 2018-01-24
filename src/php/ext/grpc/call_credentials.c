@@ -197,7 +197,7 @@ int plugin_get_metadata(
   // situations: metadata=NULL, metadata->metadata=NULL and metadata->metadata != NULL.
   // We need to use point as information to free them at each stage.
   grpc_metadata_array *metadata;
-  metadata = malloc(sizeof(grpc_metadata_array));
+  metadata = emalloc(sizeof(grpc_metadata_array));
   bool should_return = false;
 php_printf("1\n");
   if (retval == NULL || Z_TYPE_P(retval) != IS_ARRAY) {
@@ -210,7 +210,7 @@ php_printf("1\n");
     }
     if(metadata != NULL){
       grpc_php_metadata_array_destroy_including_entries(metadata);
-      free(metadata);
+      efree(metadata);
     }
     *status = GRPC_STATUS_INVALID_ARGUMENT;
     should_return = true;  // Synchronous return.
@@ -248,7 +248,7 @@ php_printf("2\n");
   }
 
   grpc_metadata_array_destroy(metadata);
-  free(metadata);
+  efree(metadata);
   return true;  // Synchronous return.
 }
 

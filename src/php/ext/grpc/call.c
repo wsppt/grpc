@@ -99,6 +99,7 @@ zval *grpc_parse_metadata_array(grpc_metadata_array
                              1 TSRMLS_CC);
         efree(str_key);
         efree(str_val);
+        PHP_GRPC_FREE_STD_ZVAL(array);
         return NULL;
       }
       php_grpc_add_next_index_stringl(data, str_val,
@@ -193,7 +194,7 @@ bool create_metadata_array(zval *array, grpc_metadata_array *metadata) {
 
 void grpc_php_metadata_array_destroy_including_entries(
     grpc_metadata_array* array) {
-  php_printf("count %d \n", array->count);
+  //php_printf("count %d \n", array->count);
   if(array == NULL){
     return;
   }
@@ -203,16 +204,16 @@ void grpc_php_metadata_array_destroy_including_entries(
   }
   size_t i;
   if (array->metadata) {
-    php_printf("xxxxxx\n");
+    //php_printf("xxxxxx\n");
     for (i = 0; i < array->count; i++) {
-      php_printf("count i %d \n", i);
+      //php_printf("count i %d \n", i);
       grpc_slice_unref(array->metadata[i].key);
       grpc_slice_unref(array->metadata[i].value);
     }
   }
-  php_printf("yyyyyyyyyyyyyyyyyyx\n");
+  //php_printf("yyyyyyyyyyyyyyyyyyx\n");
   grpc_metadata_array_destroy(array);
-  php_printf("zzzzzzzzzzzzzzzzzzzzzzzzx\n");
+  //php_printf("zzzzzzzzzzzzzzzzzzzzzzzzx\n");
 }
 
 /* Wraps a grpc_call struct in a PHP object. Owned indicates whether the
@@ -567,7 +568,9 @@ cleanup:
  */
 PHP_METHOD(Call, getPeer) {
   wrapped_grpc_call *call = Z_WRAPPED_GRPC_CALL_P(getThis());
-  PHP_GRPC_RETURN_STRING(grpc_call_get_peer(call->wrapped), 1);
+  char *peer = grpc_call_get_peer(call->wrapped);
+  PHP_GRPC_RETVAL_STRING(peer, 1);
+  gpr_free(peer);
 }
 
 /**
